@@ -123,16 +123,19 @@ enum AIEngine: String, CaseIterable {
 /// Convierte una transcripción en apuntes, resumen y preguntas.
 /// La ventana del modelo del Mac es pequeña (4k-8k tokens): map (apuntes por bloque) → reduce (temas → idea central).
 enum StudyAI {
-    /// ~1.700 tokens de español por bloque, con margen para instrucciones y respuesta.
-    /// Se mantiene también con modelos mayores: bloques cortos dan apuntes más densos.
-    static let blockChars = 6_000
+    /// La ventana del modelo del Mac: 4.096 tokens en macOS 26, 8.192 desde macOS 27.
+    static let largeLocalContext: Bool = { if #available(macOS 27, *) { true } else { false } }()
+
+    /// Por bloque: ~1.700 tokens de español con ventana de 8k, ~1.100 con la de 4k (más instrucciones,
+    /// esquema, material y respuesta). Se mantiene también con modelos mayores: bloques cortos dan apuntes más densos.
+    static let blockChars = largeLocalContext ? 6_000 : 4_000
 
     /// Cuánto texto de apuntes cabe al escribir el resumen.
     /// Con el modelo del Mac, tandas cortas: cada una da de 2 a 5 temas y así una clase larga sale bien desglosada.
     static func digestChars(_ engine: AIEngine) -> Int { engine == .local ? blockChars : 24_000 }
 
     /// Tope de respuesta y poca temperatura: sin tope, el modelo del Mac a veces se desboca hasta llenar su ventana.
-    static let options = GenerationOptions(temperature: 0.4, maximumResponseTokens: 1_600)
+    static let options = GenerationOptions(temperature: 0.4, maximumResponseTokens: largeLocalContext ? 1_600 : 1_000)
 
     /// Se escribe en el idioma de la clase: unos apuntes de una asignatura en inglés, en inglés.
     static func instructions(_ language: ClassLanguage) -> String {
@@ -277,13 +280,20 @@ enum StudyAI {
 
     private static func overview(of sections: [Section], language: ClassLanguage, run: Run) async throws -> DigestOverview {
         let text = sections.map { "\($0.title): " + $0.points.joined(separator: "; ") }.joined(separator: "\n")
-        return try await respond("""
-            Estos son los temas de una clase, en orden:
+        func ask(_ limit: Int) async throws -> DigestOverview {
+            try await respond("""
+                Estos son los temas de una clase, en orden:
 
-            \(text.prefix(digestChars(run.engine)))
+                \(text.prefix(limit))
 
-            Escribe el título, la idea central y preguntas de repaso.
-            """, as: DigestOverview.self, language: language, run: run)
+                Escribe el título, la idea central y preguntas de repaso.
+                """, as: DigestOverview.self, language: language, run: run)
+        }
+        do {
+            return try await ask(digestChars(run.engine))
+        } catch LanguageModelSession.GenerationError.exceededContextWindowSize {
+            return try await ask(digestChars(run.engine) / 2) // no cabía: con la mitad de los temas
+        }
     }
 
     /// El resumen en Markdown: idea central, un apartado por tema y, si los hubo, los avisos del profesor.

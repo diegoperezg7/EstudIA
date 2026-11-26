@@ -32,8 +32,13 @@ import Foundation
     private(set) var sourceEnded = false
 
     @ObservationIgnored private weak var session: RecordingSession?
-    @ObservationIgnored private var dismissed: Set<String> = []
+    /// «Ahora no» y clases ya grabadas: clave → última vez que se vio la ventana. Caduca a los 10 min sin verla,
+    /// no al dejar de sonar (una pausa o un anuncio no deben volver a preguntar).
+    @ObservationIgnored private var dismissed: [String: Date] = [:]
     @ObservationIgnored private var recordingSource: Source?
+    @ObservationIgnored private var wasRecording = false
+    /// Comprobaciones seguidas sin rastro de la fuente que se graba (para no avisar por un corte de un momento).
+    @ObservationIgnored private var missingTicks = 0
     @ObservationIgnored private var timer: Timer?
 
     func start(session: RecordingSession) {
@@ -58,30 +63,53 @@ import Foundation
 
     /// «Ahora no»: no vuelve a preguntar por esa ventana mientras siga abierta.
     func dismiss() {
-        if let offer { dismissed.insert(offer.key) }
+        if let offer { dismissed[offer.key] = .now }
+        offer = nil
+        RecordingPill.hideOffer()
+    }
+
+    private func clearOffer() {
+        guard offer != nil else { return }
         offer = nil
         RecordingPill.hideOffer()
     }
 
     private func tick() {
         guard let session else { return }
-        let sources = Self.currentSources()
-        // Las ventanas que se cerraron dejan de estar descartadas: si vuelven a abrir la clase, se pregunta.
-        dismissed.formIntersection(sources.map(\.key))
+        let snap = Self.snapshot()
+        let now = Date.now
+        for key in snap.openKeys.union(snap.candidates.map(\.key)) where dismissed[key] != nil { dismissed[key] = now }
+        dismissed = dismissed.filter { now.timeIntervalSince($0.value) < 600 }
 
         if session.isActive || session.phase == .starting {
-            if offer != nil { offer = nil; RecordingPill.hideOffer() }
+            wasRecording = true
+            clearOffer()
             if let rec = recordingSource {
-                let gone = !sources.contains { $0.kind == rec.kind && $0.app == rec.app }
+                let present: Bool = switch rec.kind {
+                case .zoom: snap.zoomMeeting || snap.playing.contains { $0.hasPrefix("us.zoom") }
+                // Cambiar de pestaña cambia el título, pero el navegador sigue sonando: solo se da por acabada
+                // si la ventana ya no está y el navegador lleva un rato callado.
+                case .browser: snap.openKeys.contains(rec.key)
+                    || Self.browsers[rec.app].map { prefix in snap.playing.contains { $0.hasPrefix(prefix) } } ?? false
+                }
+                missingTicks = present ? 0 : missingTicks + 1
+                let gone = missingTicks >= (rec.kind == .zoom ? 2 : 8)
                 if gone != sourceEnded { sourceEnded = gone }
             }
             return
         }
+        if wasRecording {
+            // Recién finalizada: la clase que seguía abierta ya está grabada, no se vuelve a proponer.
+            wasRecording = false
+            for source in snap.candidates { dismissed[source.key] = now }
+        }
         recordingSource = nil
+        missingTicks = 0
         if sourceEnded { sourceEnded = false }
-        guard Self.enabled, session.finished == nil else { return }
+        guard Self.enabled else { clearOffer(); return }
+        guard session.finished == nil else { return }
 
-        let candidate = sources.first { !dismissed.contains($0.key) }
+        let candidate = snap.candidates.first { dismissed[$0.key] == nil }
         if candidate != offer {
             offer = candidate
             if candidate != nil { RecordingPill.showOffer(detector: self) } else { RecordingPill.hideOffer() }
@@ -96,22 +124,46 @@ import Foundation
     ]
     nonisolated private static let zoomTitles = ["zoom meeting", "reunión de zoom", "reunión zoom", "zoom webinar", "seminario web de zoom"]
 
-    nonisolated static func currentSources() -> [Source] {
-        let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
-        let playing = audioBundles()
-        var out: [Source] = []
+    struct Snapshot {
+        /// Clases que se podrían proponer: reunión de Zoom, o pestaña con palabra clave en un navegador que suena.
+        var candidates: [Source] = []
+        /// Claves de todas las ventanas de navegador y Zoom abiertas, suenen o no.
+        var openKeys: Set<String> = []
+        var playing: [String] = []
+        var zoomMeeting = false
+    }
+
+    nonisolated static func currentSources() -> [Source] { snapshot().candidates }
+
+    nonisolated static func snapshot() -> Snapshot {
+        // Prueba: `--fake-class "Título"` simula una clase sonando en Safari (sin depender del autoplay).
+        let args = CommandLine.arguments
+        if let i = args.firstIndex(of: "--fake-class"), i + 1 < args.count {
+            let fake = Source(kind: .browser, app: "Safari", title: args[i + 1], key: "fake")
+            return Snapshot(candidates: [fake], openKeys: [fake.key])
+        }
+        // Todas las ventanas, no solo las visibles: Zoom a pantalla completa vive en otro escritorio.
+        let windows = CGWindowListCopyWindowInfo([.optionAll, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
+        var snap = Snapshot(playing: audioBundles())
         for w in windows {
-            guard let app = w[kCGWindowOwnerName as String] as? String,
+            guard (w[kCGWindowLayer as String] as? Int) == 0,
+                  let app = w[kCGWindowOwnerName as String] as? String,
                   let title = w[kCGWindowName as String] as? String, !title.isEmpty else { continue }
             let lower = title.lowercased()
             if app.hasPrefix("zoom"), zoomTitles.contains(where: lower.contains) {
-                out.append(Source(kind: .zoom, app: "Zoom", title: "Reunión de Zoom", key: "zoom:\(w[kCGWindowNumber as String] ?? 0)"))
-            } else if let prefix = browsers[app], playing.contains(where: { $0.hasPrefix(prefix) }),
-                      keywords.contains(where: lower.contains) {
-                out.append(Source(kind: .browser, app: app, title: title, key: "\(app):\(title)"))
+                let key = "zoom:\(w[kCGWindowNumber as String] ?? 0)"
+                snap.zoomMeeting = true
+                snap.openKeys.insert(key)
+                snap.candidates.append(Source(kind: .zoom, app: "Zoom", title: "Reunión de Zoom", key: key))
+            } else if let prefix = browsers[app] {
+                let key = "\(app):\(title)"
+                snap.openKeys.insert(key)
+                if snap.playing.contains(where: { $0.hasPrefix(prefix) }), keywords.contains(where: lower.contains) {
+                    snap.candidates.append(Source(kind: .browser, app: app, title: title, key: key))
+                }
             }
         }
-        return out
+        return snap
     }
 
     /// Bundle id de los procesos que están sacando sonido ahora (el navegador suena desde un proceso auxiliar).

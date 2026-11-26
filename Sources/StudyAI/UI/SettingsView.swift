@@ -401,7 +401,7 @@ private struct AIEngineCard: View {
         .confirmationDialog("¿Volver a generar el resumen de todas las clases?", isPresented: $confirmAll) {
             Button("Volver a generar todas") { processor.regenerateAll() }
         } message: {
-            Text("Va de una en una y puede tardar. Tus notas y los títulos que hayas puesto no se tocan.")
+            Text("Va de una en una y puede tardar. Tus notas y los títulos que hayas puesto no se tocan; las clases con texto añadido desde el chat se saltan.")
         }
     }
 

@@ -46,6 +46,7 @@
 <p align="center">
   <img src="docs/screenshots/pildora.png" width="420" alt="Píldora flotante grabando">
   <img src="docs/screenshots/pildora-guardada.png" width="420" alt="Píldora con la clase guardada">
+  <br><img src="docs/screenshots/pildora-oferta.png" width="560" alt="La píldora propone grabar una clase que acaba de empezar">
 </p>
 
 ## Instalar
@@ -102,6 +103,7 @@ open build/EstudIA.app --args --record-for 90 --script "pause@15,resume@25,drop@
                                                        # pausa, corte de captura simulado y cierre en seco
 open build/EstudIA.app --args --lang en --import class.m4a   # clase en inglés
 open build/EstudIA.app --args --open-latest            # abre la última clase
+open build/EstudIA.app --args --fake-class "UNIR · Tema 5"   # simula una clase sonando: la píldora propone grabarla
 open --env STUDYAI_NO_VISION=1 build/EstudIA.app ...   # sin detectar quién habla (para medir consumo)
 open build/EstudIA.app --args --dark                   # fuerza el modo oscuro
 ```

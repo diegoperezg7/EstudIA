@@ -110,6 +110,7 @@ struct HomeView: View {
                             presenting: deletingLecture) { l in
             Button("Eliminar clase", role: .destructive) {
                 processor.cancel(l)
+                Materials.removeFiles(of: l)
                 context.delete(l)
                 try? context.save()
             }
@@ -330,7 +331,7 @@ private struct RecordHero: View {
                         Text(compact ? "Grabar una clase de \(fixedSubject?.name ?? "esta carpeta")" : "Graba una clase")
                             .font(.system(size: compact ? 20 : 26, weight: .bold)).foregroundStyle(.white)
                         if !compact {
-                            Text("Ábrela en Safari o Chrome, pulsa Grabar y dale al play. Solo se graba el sonido del Mac, nunca el micrófono.")
+                            Text("Ábrela en el navegador o en Zoom y pulsa Grabar; si se te olvida, EstudIA te lo propone. Solo se graba el sonido del Mac, nunca el micrófono.")
                                 .foregroundStyle(.white.opacity(0.75))
                                 .fixedSize(horizontal: false, vertical: true)
                         }

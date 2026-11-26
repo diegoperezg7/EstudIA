@@ -177,3 +177,8 @@ enum Store {
         return try ModelContainer(for: Subject.self, Lecture.self, TranscriptSegment.self, Material.self, configurations: config)
     }
 }
+
+extension Lecture {
+    /// Borrada: tras guardar el borrado, SwiftData puede dejar `isDeleted` en false y solo queda sin contexto.
+    var isGone: Bool { isDeleted || modelContext == nil }
+}

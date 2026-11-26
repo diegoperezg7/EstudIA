@@ -17,9 +17,11 @@ enum LanguageDetector {
         }
     }
 
-    /// El idioma ganador, o nil si no hay voz suficiente para decidir.
+    /// El idioma ganador, o nil si no hay voz suficiente para decidir o aún falta el modelo de algún idioma
+    /// (se está bajando: sin él, el otro ganaría siempre).
     static func detect(_ buffers: [AVAudioPCMBuffer]) async -> ClassLanguage? {
         let all = await scores(buffers)
+        guard all.count == ClassLanguage.allCases.count, !all.contains(where: { $0.confidence < 0 }) else { return nil }
         guard let best = all.max(by: { $0.confidence < $1.confidence }), best.words >= 8 else { return nil }
         return best.language
     }
@@ -27,7 +29,7 @@ enum LanguageDetector {
     private static func score(_ buffers: [AVAudioPCMBuffer], language: ClassLanguage) async throws -> Score {
         guard let locale = try? await LiveTranscriber.resolvedLocale(language),
               await SpeechTranscriber.installedLocales.contains(where: { $0.identifier(.bcp47) == locale.identifier(.bcp47) })
-        else { return Score(language: language, confidence: 0, words: 0) } // sin el modelo de ese idioma no compite
+        else { return Score(language: language, confidence: -1, words: 0) } // -1: falta el modelo de ese idioma
         let transcriber = SpeechTranscriber(locale: locale, transcriptionOptions: [], reportingOptions: [],
                                             attributeOptions: [.transcriptionConfidence])
         guard let format = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: [transcriber]) else {

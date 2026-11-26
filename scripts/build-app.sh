@@ -17,6 +17,7 @@ cp "$BIN/StudyAI" "$APP/Contents/MacOS/"
 cp "$BIN/EstudIAMCP" "$APP/Contents/MacOS/estudia-mcp" # servidor MCP para ChatGPT/Claude
 # Complemento local para ChatGPT (marketplace en carpeta), con su propia copia del servidor.
 cp -R Resources/ChatGPTPlugin "$APP/Contents/Resources/ChatGPTPlugin"
+mkdir -p "$APP/Contents/Resources/ChatGPTPlugin/plugins/estudia/bin" # git no guarda carpetas vacías
 cp "$BIN/EstudIAMCP" "$APP/Contents/Resources/ChatGPTPlugin/plugins/estudia/bin/estudia-mcp"
 cp Resources/Info.plist "$APP/Contents/"
 PLIST="$APP/Contents/Info.plist"

@@ -22,7 +22,7 @@ struct LibraryView: View {
         Group {
             if showSettings {
                 SettingsView().transition(.move(edge: .trailing).combined(with: .opacity))
-            } else if let open, !open.isDeleted {
+            } else if let open, !open.isGone {
                 LectureDetailView(lecture: open) { self.open = nil }
                     .transition(.move(edge: .trailing).combined(with: .opacity))
             } else {
