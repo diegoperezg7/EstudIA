@@ -110,6 +110,7 @@ struct HomeView: View {
                             presenting: deletingLecture) { l in
             Button("Eliminar clase", role: .destructive) {
                 processor.cancel(l)
+                Materials.removeFiles(of: l)
                 context.delete(l)
                 try? context.save()
             }
