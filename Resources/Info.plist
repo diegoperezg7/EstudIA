@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleName</key>
+	<string>EstudIA</string>
+	<key>CFBundleDisplayName</key>
+	<string>EstudIA</string>
+	<key>CFBundleIdentifier</key>
+	<string>es.personal.studyai</string>
+	<key>CFBundleExecutable</key>
+	<string>StudyAI</string>
+	<key>NSAccentColorName</key>
+	<string>AccentColor</string>
+	<key>CFBundleIconFile</key>
+	<string>AppIcon</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>1.1</string>
+	<key>CFBundleVersion</key>
+	<string>10100</string>
+	<key>SUFeedURL</key>
+	<string>https://github.com/diegoperezg7/EstudIA/releases/latest/download/appcast.xml</string>
+	<key>SUEnableAutomaticChecks</key>
+	<true/>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>es</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>26.0</string>
+	<key>LSApplicationCategoryType</key>
+	<string>public.app-category.education</string>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>StudyAI transcribe en este Mac el audio de las clases que reproduces. El audio no sale del ordenador.</string>
+</dict>
+</plist>

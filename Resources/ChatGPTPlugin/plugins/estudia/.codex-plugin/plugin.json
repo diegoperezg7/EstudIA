@@ -1,0 +1,25 @@
+{
+  "name": "estudia",
+  "version": "1.0.0",
+  "description": "Lee las clases grabadas con EstudIA en este Mac: lista, busca y abre resumen, apuntes, notas y transcripción con minutos.",
+  "author": { "name": "EstudIA" },
+  "license": "Proprietary",
+  "keywords": ["clases", "apuntes", "transcripción", "estudiar", "universidad"],
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "EstudIA",
+    "shortDescription": "Tus clases grabadas, para estudiar",
+    "longDescription": "Pregunta por tus clases de EstudIA: busca un tema en todas, lee el resumen y los apuntes, o la transcripción con el minuto exacto. Todo se lee desde este Mac.",
+    "developerName": "EstudIA",
+    "category": "Productivity",
+    "capabilities": ["Read"],
+    "defaultPrompt": [
+      "¿Qué se explicó en mi última clase?",
+      "Hazme un test de la última clase",
+      "Busca dónde se habló de inventarios"
+    ],
+    "composerIcon": "./assets/logo.png",
+    "logo": "./assets/logo.png"
+  }
+}

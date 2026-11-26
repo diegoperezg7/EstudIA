@@ -1,0 +1,12 @@
+{
+  "name": "estudia",
+  "interface": { "displayName": "EstudIA" },
+  "plugins": [
+    {
+      "name": "estudia",
+      "source": { "source": "local", "path": "./plugins/estudia" },
+      "policy": { "installation": "AVAILABLE", "authentication": "ON_INSTALL" },
+      "category": "Productivity"
+    }
+  ]
+}
