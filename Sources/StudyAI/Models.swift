@@ -147,19 +147,31 @@ enum Store {
 
     /// Al estrenar versión, antes de abrir la biblioteca con ella: copia de la base de datos en Copias/<versión anterior>.
     /// Si una actualización saliera mal, las clases siguen ahí. Se guardan las 3 últimas.
+    /// La 1.0 no guardaba su versión: si hay biblioteca y no hay versión anotada, viene de la 1.0.
     static func backupOnNewVersion(_ dir: URL) {
-        let key = "lastOpenedVersion"
+        let key = testDirectory == nil ? "lastOpenedVersion" : "lastOpenedVersion.test" // la prueba no toca la real
         let current = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev"
         let previous = UserDefaults.standard.string(forKey: key)
-        defer { if testDirectory == nil { UserDefaults.standard.set(current, forKey: key) } }
-        guard let previous, previous != current, testDirectory == nil else { return }
+        guard previous != current else { return }
         let fm = FileManager.default
-        let backups = dir.appending(path: "Copias", directoryHint: .isDirectory)
-        let dest = backups.appending(path: "\(previous) \(Date.now.formatted(.iso8601.year().month().day()))", directoryHint: .isDirectory)
-        try? fm.createDirectory(at: dest, withIntermediateDirectories: true)
-        for name in (try? fm.contentsOfDirectory(atPath: dir.path)) ?? [] where name.hasPrefix("StudyAI.store") {
-            try? fm.copyItem(at: dir.appending(path: name), to: dest.appending(path: name))
+        let files = ((try? fm.contentsOfDirectory(atPath: dir.path)) ?? []).filter { $0.hasPrefix("StudyAI.store") }
+        guard !files.isEmpty else { // instalación nueva: nada que copiar
+            UserDefaults.standard.set(current, forKey: key)
+            return
         }
+        let backups = dir.appending(path: "Copias", directoryHint: .isDirectory)
+        let dest = backups.appending(path: "\(previous ?? "1.0") \(Date.now.formatted(.iso8601.year().month().day()))", directoryHint: .isDirectory)
+        do {
+            try fm.createDirectory(at: dest, withIntermediateDirectories: true)
+            for name in files where !fm.fileExists(atPath: dest.appending(path: name).path) {
+                try fm.copyItem(at: dir.appending(path: name), to: dest.appending(path: name))
+            }
+        } catch {
+            // Sin anotar la versión: se vuelve a intentar en el próximo arranque.
+            NSLog("StudyAI: no se pudo copiar la biblioteca antes de actualizar: \(error)")
+            return
+        }
+        UserDefaults.standard.set(current, forKey: key)
         let old = ((try? fm.contentsOfDirectory(at: backups, includingPropertiesForKeys: [.creationDateKey])) ?? [])
             .sorted { ((try? $0.resourceValues(forKeys: [.creationDateKey]).creationDate) ?? .distantPast) > ((try? $1.resourceValues(forKeys: [.creationDateKey]).creationDate) ?? .distantPast) }
         for url in old.dropFirst(3) { try? fm.removeItem(at: url) }
