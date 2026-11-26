@@ -45,22 +45,38 @@ enum Materials {
         let dir = root.appending(path: folder, directoryHint: .isDirectory)
         let fileName = url.lastPathComponent
         let (pdfName, pages) = try await Task.detached(priority: .userInitiated) { () throws -> (String?, [String]) in
-            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-            let dest = dir.appending(path: fileName)
-            try FileManager.default.copyItem(at: url, to: dest)
-            let ext = dest.pathExtension.lowercased()
-            var pdf: URL? = ext == "pdf" ? dest : nil
-            if presentationTypes.contains(ext) { pdf = convertToPDF(dest) }
-            var pages = pdf.map(pdfTexts) ?? []
-            if pages.allSatisfy({ $0.isEmpty }), ext == "pptx" { pages = PPTXText.slides(of: dest) }
-            return (pdf == dest ? nil : pdf?.lastPathComponent, pages)
+            do {
+                try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+                let dest = dir.appending(path: fileName)
+                try FileManager.default.copyItem(at: url, to: dest)
+                let ext = dest.pathExtension.lowercased()
+                var pdf: URL? = ext == "pdf" ? dest : nil
+                if presentationTypes.contains(ext) { pdf = convertToPDF(dest) }
+                var pages = pdf.map(pdfTexts) ?? []
+                if pages.allSatisfy({ $0.isEmpty }), ext == "pptx" { pages = PPTXText.slides(of: dest) }
+                return (pdf == dest ? nil : pdf?.lastPathComponent, pages)
+            } catch {
+                try? FileManager.default.removeItem(at: dir) // sin carpetas a medias
+                throw error
+            }
         }.value
+        // La conversión puede tardar minutos: si mientras tanto se borró la clase, el material sobra.
+        guard !lecture.isGone else {
+            try? FileManager.default.removeItem(at: dir)
+            throw CancellationError()
+        }
         let material = Material(name: url.deletingPathExtension().lastPathComponent, folder: folder, fileName: fileName)
         material.pdfName = pdfName
         material.pageTexts = pages
         material.lecture = lecture
         context.insert(material)
-        try context.save()
+        do {
+            try context.save()
+        } catch {
+            context.delete(material)
+            try? FileManager.default.removeItem(at: dir)
+            throw error
+        }
         return material
     }
 

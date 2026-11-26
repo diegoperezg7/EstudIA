@@ -46,7 +46,7 @@ import SwiftData
                     }
                 }
                 let duration = try await withTaskCancellationHandler { try await work.value } onCancel: { work.cancel() }
-                guard !lecture.isDeleted else { throw CancellationError() }
+                guard !lecture.isGone else { throw CancellationError() }
                 for (s, e, text) in Paragrapher.mergeShort(found.withLock({ $0 }).map { (start: $0.0, end: $0.1, text: $0.2) }) {
                     let segment = TranscriptSegment(start: s, end: e, text: text)
                     segment.lecture = lecture
@@ -56,7 +56,7 @@ import SwiftData
                 lecture.status = lecture.segments.isEmpty ? .transcriptOnly : .processing
                 if lecture.segments.isEmpty { lecture.processingError = "No se detectó voz en el archivo." }
             } catch {
-                if !lecture.isDeleted {
+                if !lecture.isGone {
                     lecture.status = .transcriptOnly
                     lecture.processingError = error is CancellationError
                         ? "Importación cancelada." : "No se pudo leer el archivo: \(error.localizedDescription)"
@@ -64,7 +64,7 @@ import SwiftData
             }
             tasks[id] = nil
             progress[id] = nil
-            guard !lecture.isDeleted else { return }
+            guard !lecture.isGone else { return }
             try? context.save()
             if lecture.status == .processing { process(lecture) }
         }
@@ -105,7 +105,7 @@ import SwiftData
                                                     material: { Materials.context(for: $0, pages: pages) }) { f, step in
                     self.progress[id] = Progress(fraction: f, step: step)
                 }
-                guard !lecture.isDeleted else { return }
+                guard !lecture.isGone else { return }
                 lecture.notesMarkdown = out.notesMarkdown
                 if let summary = out.summary {
                     lecture.summary = summary
@@ -131,11 +131,11 @@ import SwiftData
                 }
                 lecture.processingError = notes.isEmpty ? nil : notes.joined(separator: " ")
             } catch is CancellationError {
-                guard !lecture.isDeleted, !regenerating else { return }
+                guard !lecture.isGone, !regenerating else { return }
                 lecture.status = .transcriptOnly
                 lecture.processingError = "Procesado cancelado."
             } catch {
-                guard !lecture.isDeleted else { return }
+                guard !lecture.isGone else { return }
                 if regenerating {
                     lecture.processingError = "No se pudo volver a generar y se mantiene lo que había: \(error.localizedDescription)"
                 } else {
@@ -147,6 +147,8 @@ import SwiftData
         }
     }
 
+    @ObservationIgnored private var batchCurrent: PersistentIdentifier?
+
     func cancel(_ lecture: Lecture) {
         tasks[lecture.persistentModelID]?.cancel()
     }
@@ -155,13 +157,15 @@ import SwiftData
     func regenerateAll() {
         guard batchTask == nil else { return }
         let all = (try? context.fetch(FetchDescriptor<Lecture>(sortBy: [SortDescriptor(\.createdAt, order: .reverse)]))) ?? []
-        let lectures = all.filter { $0.status != .recording && !$0.transcriptText.isEmpty }
+        // Las clases con texto añadido desde el chat se rehacen solo a mano (piden confirmación una a una).
+        let lectures = all.filter { $0.status != .recording && !$0.transcriptText.isEmpty && !$0.summaryEdited }
         guard !lectures.isEmpty else { return }
         batch = (0, lectures.count)
         batchTask = Task {
             for (i, lecture) in lectures.enumerated() {
                 guard !Task.isCancelled else { break }
-                if !lecture.isDeleted {
+                if !lecture.isGone {
+                    batchCurrent = lecture.persistentModelID
                     process(lecture)
                     await tasks[lecture.persistentModelID]?.value
                 }
@@ -169,11 +173,13 @@ import SwiftData
             }
             batch = nil
             batchTask = nil
+            batchCurrent = nil
         }
     }
 
+    /// Para la tanda y la clase que está rehaciendo; no toca importaciones ni la clase recién grabada.
     func cancelBatch() {
         batchTask?.cancel()
-        tasks.values.forEach { $0.cancel() }
+        if let batchCurrent { tasks[batchCurrent]?.cancel() }
     }
 }

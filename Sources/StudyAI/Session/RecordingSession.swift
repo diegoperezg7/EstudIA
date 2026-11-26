@@ -82,6 +82,9 @@ enum StartProblem: Equatable {
     /// El último párrafo guardado, por si el siguiente trozo es su continuación. nil tras un hueco de audio.
     @ObservationIgnored private var lastParagraph: TranscriptSegment?
     @ObservationIgnored private var detectTask: Task<Void, Never>?
+    /// Segundos de audio con los que se vuelve a intentar decidir el idioma (si no hubo voz suficiente).
+    @ObservationIgnored private var detectAt = 25.0
+    private static let detectGiveUp = 150.0
 
     var isActive: Bool { lecture != nil }
 
@@ -115,6 +118,7 @@ enum StartProblem: Equatable {
             Task.detached(priority: .background) { for l in ClassLanguage.allCases { try? await LiveTranscriber.installLanguage(l) } }
         }
         detectTask = nil
+        detectAt = 25
         timeOffset = 0
         speakerSamples = []
         watchSpeakers = SpeakerVision.isAvailable && Prefs.watchSpeakers && ProcessInfo.processInfo.environment["STUDYAI_NO_VISION"] == nil
@@ -156,7 +160,8 @@ enum StartProblem: Equatable {
 
     private func startTranscriber(_ transcriber: LiveTranscriber) async throws {
         let offset = timeOffset
-        let gen = stats.withLock { s in s.generation += 1; return s.generation }
+        // La generación nueva solo se activa cuando el transcriptor ya arrancó: mientras tanto el anterior sigue contando.
+        let gen = stats.withLock { $0.generation } + 1
         try await transcriber.start(
             language: language,
             onVolatile: { [stats] text in stats.withLock { if $0.generation == gen { $0.volatileText = text } } },
@@ -164,6 +169,7 @@ enum StartProblem: Equatable {
                 stats.withLock { if $0.generation == gen { $0.pendingSegments.append((s + offset, e + offset, text)) } }
             },
             onFailure: { [stats] in stats.withLock { if $0.generation == gen { $0.transcriberFailed = true } } })
+        stats.withLock { $0.generation = gen }
     }
 
     private func makeCapture() async throws -> SystemAudioCapture {
@@ -249,6 +255,10 @@ enum StartProblem: Equatable {
         speakerTask?.cancel()
         detectTask?.cancel()
         await capture?.stop()
+        // El audio pendiente de repetir tras un cambio de idioma solo sale con el siguiente buffer en vivo:
+        // si se finaliza en pausa o justo después, se pasa aquí para no perder el principio de la clase.
+        let replay = stats.withLock { s in defer { s.replay = [] }; return s.replay }
+        for b in replay { transcriber?.append(b) }
         await transcriber?.finish()
         drainSegments()
 
@@ -418,7 +428,7 @@ enum StartProblem: Equatable {
         if silent != silentFor { silentFor = silent }
         drainSegments()
         saveDraft(s.volatileText)
-        if s.detecting, s.pendingSeconds >= 25, detectTask == nil { detectLanguage() }
+        if s.detecting, s.pendingSeconds >= detectAt, detectTask == nil { detectLanguage() }
 
         if s.transcriberFailed, phase == .recording || phase == .paused {
             freezeClock()
@@ -441,8 +451,20 @@ enum StartProblem: Equatable {
     }
 
     private func switchLanguage(to detected: ClassLanguage?) async {
-        guard let lecture, phase == .recording || phase == .paused else { return }
-        guard let detected, detected != language, stats.withLock({ $0.detecting }) else {
+        guard let lecture, phase == .recording || phase == .paused, stats.withLock({ $0.detecting }) else { return }
+        guard let detected else {
+            // Sin voz suficiente (sala de espera, música de entrada) o sin el modelo del otro idioma todavía:
+            // se vuelve a probar con 25 s más de audio, hasta un tope.
+            let heard = stats.withLock { $0.pendingSeconds }
+            if heard < Self.detectGiveUp {
+                detectAt = heard + 25
+                detectTask = nil
+            } else {
+                stats.withLock { $0.detecting = false; $0.pending = [] }
+            }
+            return
+        }
+        guard detected != language else {
             stats.withLock { $0.detecting = false; $0.pending = [] }
             return
         }
@@ -450,12 +472,22 @@ enum StartProblem: Equatable {
         let previous = language
         language = detected
         let fresh = LiveTranscriber()
+        let oldGeneration = stats.withLock { $0.generation }
+        // Si el cambio falla o mientras tanto se finalizó la clase, el transcriptor de antes sigue siendo el bueno.
+        func keepOld() async {
+            language = previous
+            stats.withLock { $0.generation = oldGeneration; $0.detecting = false; $0.pending = [] }
+            await fresh.cancel()
+        }
         do {
             try await startTranscriber(fresh)
         } catch {
             NSLog("StudyAI: no se pudo cambiar de idioma: \(error)")
-            language = previous
-            stats.withLock { $0.detecting = false; $0.pending = [] }
+            await keepOld()
+            return
+        }
+        guard !Task.isCancelled, self.lecture === lecture, phase == .recording || phase == .paused else {
+            await keepOld()
             return
         }
         lecture.language = detected

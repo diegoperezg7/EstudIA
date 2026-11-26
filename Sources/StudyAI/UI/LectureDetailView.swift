@@ -994,7 +994,7 @@ private struct ChatTab: View {
 
     private func apply(_ r: ChatReply) -> Change? {
         let addition = r.addition.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !lecture.isDeleted, !addition.isEmpty else { return nil }
+        guard !lecture.isGone, !addition.isEmpty else { return nil }
         switch r.action {
         case .none:
             return nil
@@ -1013,7 +1013,7 @@ private struct ChatTab: View {
     }
 
     private func undo(_ m: Binding<Message>) {
-        guard var change = m.wrappedValue.change, !change.undone, !lecture.isDeleted else { return }
+        guard var change = m.wrappedValue.change, !change.undone, !lecture.isGone else { return }
         if change.toSummary { lecture.summary = change.previous } else { lecture.userNotes = change.previous ?? "" }
         try? context.save()
         change.undone = true
