@@ -172,6 +172,11 @@ private struct PillView: View {
             .onAppear { withAnimation(.spring(response: 0.5, dampingFraction: 0.7)) { appeared = true } }
     }
 
+    /// Al abrirse, primero crece la cápsula y después aparecen los botones; al cerrarse, se van antes de que encoja.
+    private static let reveal = AnyTransition.asymmetric(
+        insertion: .opacity.combined(with: .offset(x: -12)).animation(.easeOut(duration: 0.22).delay(0.1)),
+        removal: .opacity.animation(.easeIn(duration: 0.08)))
+
     private var pill: some View {
         HStack(spacing: 10) {
             statusDot
@@ -188,9 +193,9 @@ private struct PillView: View {
                         .lineLimit(1)
                         .frame(maxWidth: 260, alignment: .leading)
                         .fixedSize(horizontal: true, vertical: false)
-                        .transition(BlurReplaceTransition(configuration: .downUp).combined(with: MoveTransition(edge: .leading)))
+                        .transition(Self.reveal)
                 }
-                controls.transition(BlurReplaceTransition(configuration: .downUp).combined(with: ScaleTransition(0.6, anchor: .leading)))
+                controls.transition(Self.reveal)
             }
         }
         .padding(.leading, 14)
@@ -199,6 +204,8 @@ private struct PillView: View {
         // Cristal azul medianoche, como el fondo del logo; siempre oscura para leerse sobre cualquier web.
         .background(Theme.night.opacity(0.9), in: Capsule())
         .background(.ultraThinMaterial, in: Capsule())
+        // Lo que aún no cabe mientras la cápsula crece queda dentro: los botones no asoman por fuera.
+        .clipShape(Capsule())
         .overlay(Capsule().strokeBorder(LinearGradient(colors: [Theme.lavender.opacity(0.5), Theme.glow.opacity(0.15)],
                                                        startPoint: .top, endPoint: .bottom)))
         .shadow(color: Theme.violet.opacity(hover ? 0.55 : 0.3), radius: hover ? 16 : 10, y: 4)

@@ -2,6 +2,7 @@ import AppKit
 import CoreAudio
 import CoreGraphics
 import Foundation
+import StudyAICore
 
 /// Avisa cuando empieza una clase: una reunión de Zoom o un vídeo de clase sonando en el navegador.
 /// Mira cada 4 s los títulos de las ventanas (los deja leer el permiso de grabación de pantalla que ya tiene la app)
@@ -139,7 +140,7 @@ import Foundation
         // Prueba: `--fake-class "Título"` simula una clase sonando en Safari (sin depender del autoplay).
         let args = CommandLine.arguments
         if let i = args.firstIndex(of: "--fake-class"), i + 1 < args.count {
-            let fake = Source(kind: .browser, app: "Safari", title: args[i + 1], key: "fake")
+            let fake = Source(kind: .browser, app: "Google Chrome", title: WindowTitle.clean(args[i + 1], prefer: keywords) ?? "Vídeo de clase", key: "fake")
             return Snapshot(candidates: [fake], openKeys: [fake.key])
         }
         // Todas las ventanas, no solo las visibles: Zoom a pantalla completa vive en otro escritorio.
@@ -159,7 +160,8 @@ import Foundation
                 let key = "\(app):\(title)"
                 snap.openKeys.insert(key)
                 if snap.playing.contains(where: { $0.hasPrefix(prefix) }), keywords.contains(where: lower.contains) {
-                    snap.candidates.append(Source(kind: .browser, app: app, title: title, key: key))
+                    let shown = WindowTitle.clean(title, prefer: keywords) ?? "Vídeo de clase" // sin ids ni «- Google Chrome»
+                    snap.candidates.append(Source(kind: .browser, app: app, title: shown, key: key))
                 }
             }
         }

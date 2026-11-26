@@ -364,7 +364,9 @@ private struct AIEngineCard: View {
             case .appleCloud:
                 Text(AIEngine.appleCloudAvailable
                      ? "El modelo grande de Apple, en sus servidores privados (Private Cloud Compute). Sin clave y sin coste, con un cupo de uso. La transcripción se envía cifrada a Apple para escribir el resumen."
-                     : "No está disponible en este Mac: necesita macOS 27 y Apple Intelligence activado. Mientras tanto se usa el modelo del Mac.")
+                     : !AIEngine.hasCloudEntitlement
+                        ? "Todavía no disponible: Apple tiene que conceder a EstudIA el permiso para usar su nube. Mientras tanto se usa el modelo del Mac."
+                        : "No está disponible en este Mac: necesita macOS 27 y Apple Intelligence activado. Mientras tanto se usa el modelo del Mac.")
                     .font(.caption).foregroundStyle(.secondary)
                 if AIEngine.appleCloudAvailable { checkRow("Probar") }
             case .external:

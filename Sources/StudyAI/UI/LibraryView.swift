@@ -127,6 +127,7 @@ struct LibraryView: View {
             Task { _ = try? await Materials.add(URL(fileURLWithPath: path), to: lecture, context: context) }
         }
         if args.contains("--settings") { showSettings = true }
+        if args.contains("--regenerate-all") { processor.regenerateAll() }
         if let size = value("--size")?.split(separator: "x").compactMap({ Double($0) }), size.count == 2 {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
                 NSApp.windows.first { $0.isVisible && $0.canBecomeMain }?.setContentSize(CGSize(width: size[0], height: size[1]))

@@ -248,3 +248,13 @@ import Testing
         #expect(SlideAligner.align(paragraphs: paragraphs, pages: pages) == [nil, 0, 1, 1, 2, 3])
     }
 }
+
+@Suite struct WindowTitleTests {
+    @Test func dropsBrowserNoiseAndIDs() {
+        #expect(WindowTitle.clean("Clase 8273645_1 - UNIR - Audio playing - Google Chrome - Ana (Personal)", prefer: ["clase"]) == "Clase")
+        #expect(WindowTitle.clean("Tema 5. Obligaciones solidarias | Campus UNIR - Google Chrome", prefer: ["unir"]) == "Campus UNIR")
+        #expect(WindowTitle.clean("Tema 5. Obligaciones solidarias - Google Chrome") == "Tema 5. Obligaciones solidarias")
+        #expect(WindowTitle.clean("2026-11-26 10:30 1234567890 - Google Chrome") == nil)
+        #expect(WindowTitle.clean("https://unir.zoom.us/rec/play/AbC123xyz987 - Reproduciendo audio") == nil)
+    }
+}

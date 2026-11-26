@@ -252,3 +252,35 @@ public enum SlideAligner {
         }
     }
 }
+
+/// Un título de ventana de navegador presentable: sin el nombre del navegador, el perfil, «Reproduciendo audio»,
+/// enlaces ni identificadores o fechas largas («8273645_1», «2026-11-26»). nil si no queda nada legible.
+public enum WindowTitle {
+    static let separators = [" - ", " – ", " — ", " | ", " · ", " :: "]
+    static let noise: Set<String> = ["google chrome", "safari", "microsoft edge", "firefox", "mozilla firefox", "brave", "arc",
+                                     "audio playing", "reproduciendo audio", "playing audio", "reproduciendo",
+                                     "camera or microphone recording"]
+
+    public static func clean(_ title: String, prefer keywords: [String] = []) -> String? {
+        var parts = [title]
+        for sep in separators { parts = parts.flatMap { $0.components(separatedBy: sep) } }
+        let segments = parts.compactMap { part -> String? in
+            let p = part.trimmingCharacters(in: .whitespaces)
+            guard !noise.contains(p.lowercased()) else { return nil }
+            let words = p.split(separator: " ").filter { word in
+                let w = String(word)
+                let digits = w.filter(\.isNumber).count
+                let link = w.contains("://") || w.hasPrefix("www.")
+                return !(link || digits >= 4 || (digits > 0 && digits * 2 >= w.count && w.count > 2))
+            }
+            let text = words.joined(separator: " ").trimmingCharacters(in: CharacterSet(charactersIn: " -_·|#()[]"))
+            return text.filter(\.isLetter).count >= 3 ? text : nil
+        }
+        // El perfil de Chrome va al final y entre paréntesis: «Ana (Personal)».
+        let meaningful = segments.filter { !($0.hasSuffix(")") && $0 == segments.last && segments.count > 1) }
+        guard !meaningful.isEmpty else { return nil }
+        let lowerKeywords = keywords.map { $0.lowercased() }
+        let best = meaningful.first { s in lowerKeywords.contains { s.lowercased().contains($0) } } ?? meaningful[0]
+        return best.count > 60 ? String(best.prefix(59)) + "…" : best
+    }
+}

@@ -1,3 +1,4 @@
+import Security
 import Foundation
 import FoundationModels
 import StudyAICore
@@ -115,9 +116,17 @@ enum AIEngine: String, CaseIterable {
     }
 
     static var appleCloudAvailable: Bool {
-        guard #available(macOS 27, *) else { return false }
+        guard #available(macOS 27, *), hasCloudEntitlement else { return false }
         return PrivateCloudComputeLanguageModel().isAvailable
     }
+
+    /// Sin el permiso gestionado de Apple, FoundationModels cierra la app de golpe (fatalError) al primer uso
+    /// del modelo en la nube, aunque `isAvailable` diga que sí. Se mira la firma de la propia app.
+    static let hasCloudEntitlement: Bool = {
+        guard let task = SecTaskCreateFromSelf(nil) else { return false }
+        let value = SecTaskCopyValueForEntitlement(task, "com.apple.developer.private-cloud-compute" as CFString, nil)
+        return (value as? Bool) == true
+    }()
 }
 
 /// Convierte una transcripción en apuntes, resumen y preguntas.
@@ -336,6 +345,10 @@ enum StudyAI {
     }
 
     static func cloudRespond<T: Generable>(_ prompt: String, as type: T.Type, language: ClassLanguage, engine: AIEngine) async throws -> T {
+        if engine == .appleCloud {
+            // Nunca sin el permiso: sin él, el sistema cierra la app en vez de devolver un error.
+            guard AIEngine.appleCloudAvailable else { throw CloudError.notConfigured }
+        }
         if engine == .appleCloud, #available(macOS 27, *) {
             let text = instructions(language)
             let session = LanguageModelSession(model: PrivateCloudComputeLanguageModel()) { text }

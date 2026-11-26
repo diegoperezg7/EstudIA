@@ -113,12 +113,13 @@ enum SelfTest {
 
     private static func ai(path: String, language: ClassLanguage) async throws {
         let text = try String(contentsOfFile: path, encoding: .utf8)
-        print("disponibilidad=\(AIAvailability.current) caracteres=\(text.count)")
+        print("disponibilidad=\(AIAvailability.current) motor=\(AIEngine.usable.rawValue) caracteres=\(text.count)")
         let started = Date()
         let out = try await StudyAI.process(transcript: text, language: language) { f, step in print(String(format: "%3.0f%% %@", f * 100, step)) }
         print("\n## Resumen\n\(out.summary ?? "(sin resumen)")\n\n## Preguntas")
         out.reviewQuestions.forEach { print("- \($0)") }
         print("\n## Apuntes\n\(out.notesMarkdown)\n\nbloques omitidos=\(out.skippedBlocks)")
+        print("respaldo al modelo del Mac: \(out.fallbackReason ?? "no")")
         print(String(format: "tardó %.0f s", Date().timeIntervalSince(started)))
     }
 }
