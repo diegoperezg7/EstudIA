@@ -97,6 +97,11 @@ import Foundation
     nonisolated private static let zoomTitles = ["zoom meeting", "reunión de zoom", "reunión zoom", "zoom webinar", "seminario web de zoom"]
 
     nonisolated static func currentSources() -> [Source] {
+        // Prueba: `--fake-class "Título"` simula una clase sonando en Safari (sin depender del autoplay).
+        let args = CommandLine.arguments
+        if let i = args.firstIndex(of: "--fake-class"), i + 1 < args.count {
+            return [Source(kind: .browser, app: "Safari", title: args[i + 1], key: "fake")]
+        }
         let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
         let playing = audioBundles()
         var out: [Source] = []
