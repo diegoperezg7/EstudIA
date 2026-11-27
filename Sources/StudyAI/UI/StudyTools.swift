@@ -237,7 +237,7 @@ struct SubjectAskView: View {
         let top = Retriever.top(pieces.map(\.text), for: q, k: 4)
         let chosen = top.compactMap { t in pieces.first { $0.text == t } }
         let fragments = chosen.map { "Clase «\($0.lecture.displayTitle)», minuto \(TimeFormat.clock($0.start)): \($0.text)" }
-        let terms = subject.lectures.flatMap(LectureProcessor.terms(for:))
+        let terms = subject.lectures.flatMap { LectureProcessor.terms(for: $0, onDevice: true) } // la respuesta la da el modelo del Mac
         let language = subject.lectures.first?.language ?? .spanish
         Task {
             do {

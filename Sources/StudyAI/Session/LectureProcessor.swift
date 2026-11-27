@@ -125,7 +125,7 @@ import UserNotifications
         let transcript = lecture.transcriptText
         let language = lecture.language
         let pages = lecture.materials.sorted { $0.createdAt < $1.createdAt }.flatMap(\.pageTexts).filter { !$0.isEmpty }
-        let terms = Self.terms(for: lecture)
+        let terms = Self.terms(for: lecture, onDevice: local || AIEngine.usable == .local)
 
         tasks[id] = Task {
             defer { tasks[id] = nil; progress[id] = nil }
@@ -189,9 +189,11 @@ import UserNotifications
     }
 
     /// Lo que la transcripción suele traer mal escrito: vocabulario de Ajustes, asignaturas y lo visto en pantalla.
-    static func terms(for lecture: Lecture) -> [String] {
+    /// Lo leído en pantalla sale de toda la pantalla (otras ventanas, avisos): solo se le da al modelo del Mac.
+    /// Fuera del Mac van el vocabulario que escribe Ana y la asignatura; la transcripción ya llega corregida con esos términos.
+    static func terms(for lecture: Lecture, onDevice: Bool = AIEngine.usable == .local) -> [String] {
         var seen = Set<String>()
-        return (Prefs.vocabulary + [lecture.subject?.name].compactMap { $0 } + lecture.screenTerms)
+        return (Prefs.vocabulary + [lecture.subject?.name].compactMap { $0 } + (onDevice ? lecture.screenTerms : []))
             .filter { seen.insert($0.lowercased()).inserted }
     }
 

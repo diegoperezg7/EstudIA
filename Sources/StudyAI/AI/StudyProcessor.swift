@@ -420,7 +420,7 @@ enum StudyAI {
             do {
                 return try T(GeneratedContent(json: CloudLLM.jsonObject(in: text)))
             } catch {
-                NSLog("StudyAI: respuesta del proveedor sin el formato pedido (\(error)): \(text.prefix(200))")
+                NSLog("StudyAI: respuesta del proveedor sin el formato pedido (\(Swift.type(of: error)), \(text.count) caracteres)")
                 lastError = error
             }
         }
