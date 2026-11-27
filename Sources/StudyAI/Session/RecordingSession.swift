@@ -75,6 +75,10 @@ enum StartProblem: Equatable {
     @ObservationIgnored private var timeOffset: Double = 0
     /// Quién hablaba en cada momento (tiempo de audio), deducido de la pantalla.
     @ObservationIgnored private var speakerSamples: [(time: Double, name: String)] = []
+    /// Términos vistos en pantalla durante la grabación y cuántas veces.
+    @ObservationIgnored private var screenTermCounts: [String: Int] = [:]
+    /// Términos fiables con los que se corrige la transcripción al vuelo (ver `TermFixer`).
+    @ObservationIgnored private var fixTerms: [String] = []
     @ObservationIgnored private var speakerTask: Task<Void, Never>?
     @ObservationIgnored private var watchSpeakers = false
     @ObservationIgnored private var language: ClassLanguage = .spanish
@@ -100,7 +104,8 @@ enum StartProblem: Equatable {
     // MARK: Inicio
 
     /// Si falta el modelo del idioma, se descarga aquí mismo (la píldora aún no aparece: «Empezando…» en el botón).
-    func start(subject: Subject?, language: ClassLanguage = .spanish) async {
+    /// `hint`: título de la pestaña o reunión detectada, para adivinar la asignatura si no se eligió.
+    func start(subject: Subject?, language: ClassLanguage = .spanish, hint: String? = nil) async {
         guard phase == .idle else { return }
         startProblem = nil
         finished = nil
@@ -121,6 +126,9 @@ enum StartProblem: Equatable {
         detectAt = 25
         timeOffset = 0
         speakerSamples = []
+        screenTermCounts = [:]
+        let subjects = (try? context.fetch(FetchDescriptor<Subject>())) ?? []
+        fixTerms = Prefs.vocabulary + subjects.map(\.name)
         watchSpeakers = SpeakerVision.isAvailable && Prefs.watchSpeakers && ProcessInfo.processInfo.environment["STUDYAI_NO_VISION"] == nil
         let transcriber = LiveTranscriber()
         let capture: SystemAudioCapture
@@ -142,7 +150,7 @@ enum StartProblem: Equatable {
         }
 
         // La clase solo se crea cuando todo funciona: nunca queda una clase vacía seleccionada y borrada.
-        let lecture = Lecture(title: "", subject: subject)
+        let lecture = Lecture(title: "", subject: subject ?? Self.guessSubject(hint: hint, subjects: subjects, context: context))
         lecture.language = language
         context.insert(lecture)
         try? context.save()
@@ -156,6 +164,15 @@ enum StartProblem: Equatable {
         startTicking()
         if watchSpeakers { startWatchingSpeakers() }
         RecordingIndicators.show(session: self)
+    }
+
+    /// Por el título de la pestaña o, si no, por el horario de las clases anteriores.
+    static func guessSubject(hint: String?, subjects: [Subject], context: ModelContext, at date: Date = .now) -> Subject? {
+        let names = subjects.map(\.name)
+        if let hint, let name = SubjectGuess.byTitle(hint, subjects: names) { return subjects.first { $0.name == name } }
+        let history = ((try? context.fetch(FetchDescriptor<Lecture>())) ?? []).compactMap { l in l.subject.map { (l.createdAt, $0.name) } }
+        guard let name = SubjectGuess.bySchedule(date, history: history) else { return nil }
+        return subjects.first { $0.name == name }
     }
 
     private func startTranscriber(_ transcriber: LiveTranscriber) async throws {
@@ -264,6 +281,9 @@ enum StartProblem: Equatable {
 
         lecture.duration = elapsed
         lecture.liveDraft = nil
+        let speakers = Set(lecture.segments.compactMap(\.speaker))
+        lecture.screenTerms = Array(speakers) + screenTermCounts.filter { $0.value >= 2 && !speakers.contains($0.key) }
+            .sorted { $0.value > $1.value }.prefix(40).map(\.key)
         let hasSpeech = lecture.segments.contains { !$0.isGap }
         lecture.status = hasSpeech ? .processing : .transcriptOnly
         if !hasSpeech {
@@ -386,19 +406,27 @@ enum StartProblem: Equatable {
 
     // MARK: Refresco de la interfaz y persistencia
 
-    /// Cada 15 s mira la pantalla, y solo llama al modelo si ha cambiado: si no, repite el último nombre.
-    /// El modelo tarda 1-3 s y nunca bloquea la grabación; un fallo solo deja el párrafo sin nombre.
+    /// Cada 3 s mira la pantalla, y solo la vuelve a leer si ha cambiado: si no, repite el último nombre.
+    /// Leerla tarda unas décimas y nunca bloquea la grabación; un fallo solo deja el párrafo sin nombre.
     private func startWatchingSpeakers() {
         speakerTask = Task { [weak self] in
             var lastCount = -1
             var lastName: String?
             while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(15))
+                try? await Task.sleep(for: .seconds(3))
                 guard let self, self.phase == .recording, let frame = self.capture?.latestFrame, let image = frame.image else { continue }
                 let at = self.stats.withLock { $0.fedSeconds } + self.timeOffset
                 if frame.count != lastCount {
                     lastCount = frame.count
-                    lastName = await SpeakerVision.guess(image)
+                    let reading = await SpeakerVision.read(image)
+                    lastName = reading.speaker
+                    for t in reading.terms { self.screenTermCounts[t, default: 0] += 1 }
+                    // Los que ya se han visto dos veces y tienen forma propia (SharePoint, Digital Brains) corrigen la transcripción.
+                    let fresh = reading.terms.filter { t in
+                        self.screenTermCounts[t] == 2 && (t.contains(" ") || t.dropFirst().contains(where: \.isUppercase))
+                    }
+                    if let name = reading.speaker, !self.fixTerms.contains(name) { self.fixTerms.append(name) }
+                    self.fixTerms += fresh
                 }
                 if let lastName { self.speakerSamples.append((at, lastName)) }
             }
@@ -533,6 +561,7 @@ enum StartProblem: Equatable {
     private func addSegment(start: Double, end: Double, text: String, isGap: Bool = false) {
         guard let lecture else { return }
         let speaker = isGap ? nil : SpeakerVision.speaker(from: speakerSamples, start: start, end: end)
+        let text = isGap ? text : TermFixer.fix(text, terms: fixTerms)
         // Un resultado corto del reconocedor continúa el párrafo anterior en lugar de abrir otro.
         if !isGap, let last = lastParagraph, last.absorb(start: start, end: end, text: text, speaker: speaker) {
             try? context.save()

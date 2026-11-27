@@ -52,6 +52,13 @@ enum LectureStatus: String {
     var liveDraft: String?
     /// El resumen lleva texto añadido desde el chat: antes de volver a generarlo se pide confirmación.
     var summaryEdited: Bool = false
+    /// Respuesta de cada pregunta de repaso, en el mismo orden. Vacío en clases procesadas antes de tenerlas.
+    var reviewAnswers: [String] = []
+    /// Términos que se vieron escritos en pantalla durante la grabación (diapositivas, nombres, productos):
+    /// corrigen lo que el reconocedor oye mal y orientan a la IA.
+    var screenTerms: [String] = []
+    /// El proveedor externo agotó su cupo del día: la clase se procesa sola con él a partir de esta hora.
+    var cloudRetryAt: Date?
 
     var language: ClassLanguage {
         get { ClassLanguage(rawValue: languageRaw) ?? .spanish }

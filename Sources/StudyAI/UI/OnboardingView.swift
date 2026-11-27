@@ -13,6 +13,7 @@ struct OnboardingView: View {
     private let assistants = AssistantLink.allCases.filter(\.isInstalled)
     @State private var assistantsLinked = AssistantLink.allCases.filter(\.isInstalled).allSatisfy(\.isConnected)
     @State private var linking = false
+    @State private var groqConnected = GroqSetup.isConnected
 
     var body: some View {
         VStack(alignment: .leading, spacing: 22) {
@@ -59,6 +60,11 @@ struct OnboardingView: View {
 
             step(done: ai == .ready, warning: ai != .ready, title: "Resúmenes con Apple Intelligence",
                  detail: aiDetail) { EmptyView() }
+
+            step(done: groqConnected, title: "Mejores resúmenes con Groq (opcional, gratis)",
+                 detail: "Un modelo más grande escribe resúmenes y apuntes más completos. Da para unas 4 clases largas al día; si se agota, se espera al día siguiente o se hace con el del Mac.") {
+                GroqSetup { groqConnected = true }
+            }
 
             if !assistants.isEmpty {
                 step(done: assistantsLinked, title: "Preguntar a " + assistants.map(\.name).joined(separator: " y "),

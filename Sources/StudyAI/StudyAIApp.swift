@@ -1,5 +1,6 @@
 import SwiftData
 import SwiftUI
+import UserNotifications
 
 struct StudyAIApp: App {
     @NSApplicationDelegateAdaptor private var delegate: AppDelegate
@@ -81,10 +82,11 @@ struct StudyAIApp: App {
     }
 }
 
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegate {
     @MainActor static var session: RecordingSession?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        UNUserNotificationCenter.current().delegate = self
         if CommandLine.arguments.contains("--dark") { NSApp.appearance = NSAppearance(named: .darkAqua) } else { Prefs.applyAppearance() }
     }
 
@@ -98,6 +100,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             return .terminateLater
         }
+    }
+
+    /// Pulsar «Resumen listo» abre esa clase (si la ventana está cerrada, solo trae la app al frente).
+    func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse) async {
+        let id = response.notification.request.identifier
+        await MainActor.run {
+            let lecture = LectureProcessor.notified.removeValue(forKey: id)
+            OpenLecture.post(lecture?.isGone == false ? lecture : nil)
+        }
+    }
+
+    /// También se ve con la app delante: puede estar en otra clase.
+    func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification) async -> UNNotificationPresentationOptions {
+        [.banner, .sound]
     }
 
     /// Al cerrar la ventana sigue en la barra de menús (para grabar o avisar de una clase); se sale desde su menú.

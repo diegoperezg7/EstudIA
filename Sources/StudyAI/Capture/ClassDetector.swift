@@ -8,13 +8,61 @@ import StudyAICore
 /// Mira cada 4 s los títulos de las ventanas (los deja leer el permiso de grabación de pantalla que ya tiene la app)
 /// y qué apps están sacando sonido (CoreAudio, sin permisos). Nunca graba sola: solo propone en la píldora.
 @MainActor @Observable final class ClassDetector {
+    /// Dónde se dan o se ven clases online: decide el logo de la píldora y qué pestañas se ofrecen sin palabra clave.
+    enum Platform: String, CaseIterable {
+        case meet, teams, zoom, webex, classroom, youtube, moodle
+
+        var name: String {
+            switch self {
+            case .meet: "Google Meet"
+            case .teams: "Microsoft Teams"
+            case .zoom: "Zoom"
+            case .webex: "Webex"
+            case .classroom: "Google Classroom"
+            case .youtube: "YouTube"
+            case .moodle: "Moodle"
+            }
+        }
+        var logo: String {
+            switch self {
+            case .meet: "LogoGoogleMeet"
+            case .teams: "LogoMicrosoftTeams"
+            case .zoom: "LogoZoom"
+            case .webex: "LogoWebex"
+            case .classroom: "LogoGoogleClassroom"
+            case .youtube: "LogoYouTube"
+            case .moodle: "LogoMoodle"
+            }
+        }
+        /// Una videollamada o un aula con sonido se ofrece siempre; en YouTube o Moodle hace falta una palabra clave.
+        var isLive: Bool { ![.youtube, .moodle].contains(self) }
+
+        /// Por el título de la pestaña: «Meet - abc-defg-hij», «Tema 3 - YouTube», «Reunión | Microsoft Teams».
+        nonisolated static func detect(_ lowerTitle: String) -> Platform? {
+            if lowerTitle.hasPrefix("meet - ") || lowerTitle.contains("google meet")
+                || lowerTitle.range(of: #"\b[a-z]{3}-[a-z]{4}-[a-z]{3}\b"#, options: .regularExpression) != nil { return .meet }
+            let marks: [(String, Platform)] = [("microsoft teams", .teams), ("webex", .webex), ("zoom", .zoom),
+                                                ("classroom", .classroom), ("youtube", .youtube), ("moodle", .moodle)]
+            return marks.first { lowerTitle.contains($0.0) }?.1
+        }
+    }
+
     struct Source: Equatable {
-        enum Kind { case zoom, browser }
+        /// zoom: ventana de reunión de Zoom. browser: pestaña que suena. app: Teams o Webex de escritorio sonando.
+        enum Kind { case zoom, browser, app }
         var kind: Kind
         var app: String
         var title: String
         /// Identifica la ventana para no volver a preguntar mientras siga abierta tras «Ahora no».
         var key: String
+        /// Para enseñar el icono de la app en la píldora.
+        var bundleID: String?
+        /// Plataforma reconocida en el navegador: su logo va antes que el del navegador.
+        var platform: Platform?
+        /// Apps de escritorio: prefijo del bundle que suena, para saber si la llamada sigue.
+        var audioPrefix: String?
+
+        var displayName: String { platform?.name ?? app }
     }
 
     static let shared = ClassDetector()
@@ -41,6 +89,7 @@ import StudyAICore
     /// Comprobaciones seguidas sin rastro de la fuente que se graba (para no avisar por un corte de un momento).
     @ObservationIgnored private var missingTicks = 0
     @ObservationIgnored private var timer: Timer?
+    @ObservationIgnored private var lastAppKeys: Set<String> = []
 
     func start(session: RecordingSession) {
         self.session = session
@@ -57,7 +106,8 @@ import StudyAICore
         self.offer = nil
         RecordingPill.hideOffer()
         Task {
-            await session.start(subject: nil, language: ClassLanguage(rawValue: UserDefaults.standard.string(forKey: Prefs.languageKey) ?? "") ?? .spanish)
+            await session.start(subject: nil, language: ClassLanguage(rawValue: UserDefaults.standard.string(forKey: Prefs.languageKey) ?? "") ?? .spanish,
+                                hint: offer.title)
             if !session.isActive { recordingSource = nil }
         }
     }
@@ -92,6 +142,7 @@ import StudyAICore
                 // si la ventana ya no está y el navegador lleva un rato callado.
                 case .browser: snap.openKeys.contains(rec.key)
                     || Self.browsers[rec.app].map { prefix in snap.playing.contains { $0.hasPrefix(prefix) } } ?? false
+                case .app: rec.audioPrefix.map { prefix in snap.playing.contains { $0.hasPrefix(prefix) } } ?? false
                 }
                 missingTicks = present ? 0 : missingTicks + 1
                 let gone = missingTicks >= (rec.kind == .zoom ? 2 : 8)
@@ -110,7 +161,11 @@ import StudyAICore
         guard Self.enabled else { clearOffer(); return }
         guard session.finished == nil else { return }
 
-        let candidate = snap.candidates.first { dismissed[$0.key] == nil }
+        // Teams o Webex de escritorio solo cuentan si siguen sonando en la siguiente comprobación: un aviso
+        // de mensaje nuevo dura un segundo, una llamada no.
+        let seenBefore = lastAppKeys
+        lastAppKeys = Set(snap.candidates.filter { $0.kind == .app }.map(\.key))
+        let candidate = snap.candidates.first { dismissed[$0.key] == nil && ($0.kind != .app || seenBefore.contains($0.key)) }
         if candidate != offer {
             offer = candidate
             if candidate != nil { RecordingPill.showOffer(detector: self) } else { RecordingPill.hideOffer() }
@@ -140,7 +195,8 @@ import StudyAICore
         // Prueba: `--fake-class "Título"` simula una clase sonando en Safari (sin depender del autoplay).
         let args = CommandLine.arguments
         if let i = args.firstIndex(of: "--fake-class"), i + 1 < args.count {
-            let fake = Source(kind: .browser, app: "Google Chrome", title: WindowTitle.clean(args[i + 1], prefer: keywords) ?? "Vídeo de clase", key: "fake")
+            let fake = Source(kind: .browser, app: "Google Chrome", title: WindowTitle.clean(args[i + 1], prefer: keywords) ?? "",
+                              key: "fake", bundleID: "com.google.Chrome", platform: Platform.detect(args[i + 1].lowercased()))
             return Snapshot(candidates: [fake], openKeys: [fake.key])
         }
         // Todas las ventanas, no solo las visibles: Zoom a pantalla completa vive en otro escritorio.
@@ -151,22 +207,33 @@ import StudyAICore
                   let app = w[kCGWindowOwnerName as String] as? String,
                   let title = w[kCGWindowName as String] as? String, !title.isEmpty else { continue }
             let lower = title.lowercased()
+            let bundle = (w[kCGWindowOwnerPID as String] as? pid_t).flatMap { NSRunningApplication(processIdentifier: $0)?.bundleIdentifier }
             if app.hasPrefix("zoom"), zoomTitles.contains(where: lower.contains) {
                 let key = "zoom:\(w[kCGWindowNumber as String] ?? 0)"
                 snap.zoomMeeting = true
                 snap.openKeys.insert(key)
-                snap.candidates.append(Source(kind: .zoom, app: "Zoom", title: "Reunión de Zoom", key: key))
+                snap.candidates.append(Source(kind: .zoom, app: "Zoom", title: "Reunión de Zoom", key: key, bundleID: bundle))
             } else if let prefix = browsers[app] {
                 let key = "\(app):\(title)"
                 snap.openKeys.insert(key)
-                if snap.playing.contains(where: { $0.hasPrefix(prefix) }), keywords.contains(where: lower.contains) {
-                    let shown = WindowTitle.clean(title, prefer: keywords) ?? "Vídeo de clase" // sin ids ni «- Google Chrome»
-                    snap.candidates.append(Source(kind: .browser, app: app, title: shown, key: key))
+                let platform = Platform.detect(lower)
+                if snap.playing.contains(where: { $0.hasPrefix(prefix) }),
+                   platform?.isLive == true || keywords.contains(where: lower.contains) {
+                    let shown = WindowTitle.clean(title, prefer: keywords) ?? "" // sin ids ni «- Google Chrome»
+                    snap.candidates.append(Source(kind: .browser, app: app, title: shown, key: key, bundleID: bundle, platform: platform))
                 }
             }
         }
+        for (prefix, name) in desktopCalls where snap.playing.contains(where: { $0.hasPrefix(prefix) }) {
+            let bundle = NSWorkspace.shared.runningApplications
+                .first { $0.activationPolicy == .regular && $0.bundleIdentifier?.hasPrefix(prefix) == true }?.bundleIdentifier
+            snap.candidates.append(Source(kind: .app, app: name, title: "", key: "app:\(prefix)", bundleID: bundle, audioPrefix: prefix))
+        }
         return snap
     }
+
+    /// Videollamadas de escritorio que no dejan título reconocible: se detectan porque suenan.
+    nonisolated private static let desktopCalls = [("com.microsoft.teams", "Microsoft Teams"), ("Cisco-Systems.Spark", "Webex")]
 
     /// Bundle id de los procesos que están sacando sonido ahora (el navegador suena desde un proceso auxiliar).
     nonisolated static func audioBundles() -> [String] {

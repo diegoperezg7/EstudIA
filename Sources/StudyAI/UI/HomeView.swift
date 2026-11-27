@@ -35,6 +35,8 @@ struct HomeView: View {
     @State private var deletingSubject: Subject?
     @State private var dropTargeted = false
     @State private var width: CGFloat = 1200
+    @State private var reviewing: Subject?
+    @State private var asking: Subject?
 
     private var unfiled: [Lecture] { lectures.filter { $0.subject == nil } }
 
@@ -49,7 +51,8 @@ struct HomeView: View {
         let base = folder.map(inFolder) ?? lectures
         guard !search.isEmpty else { return base }
         return base.filter { l in
-            [l.title, l.summary ?? "", l.subject?.name ?? "", l.userNotes, l.transcriptPreview].contains { $0.localizedStandardContains(search) }
+            [l.title, l.summary ?? "", l.subject?.name ?? "", l.userNotes, l.notesMarkdown ?? ""].contains { $0.localizedStandardContains(search) }
+                || l.segments.contains { $0.text.localizedStandardContains(search) }
         }
     }
 
@@ -94,6 +97,10 @@ struct HomeView: View {
             if imported.count == 1 { open = imported[0] }
             return !media.isEmpty
         } isTargeted: { dropTargeted = $0 && !session.isActive }
+        .sheet(item: $reviewing) { s in
+            FlashcardsView(title: s.name, cards: Flashcard.cards(of: s.lectures.sorted { $0.createdAt < $1.createdAt }))
+        }
+        .sheet(item: $asking) { s in SubjectAskView(subject: s) { open = $0 } }
         .sheet(isPresented: Binding(get: { editingSubject != nil }, set: { if !$0 { editingSubject = nil } })) {
             SubjectEditor(subject: editingSubject ?? nil) { saved in
                 if editingSubject == .some(nil), let saved { folder = .subject(saved) }
@@ -179,6 +186,11 @@ struct HomeView: View {
                     .foregroundStyle(.secondary)
             }
             Spacer()
+            if let s = f.subject, s.lectures.contains(where: { $0.summary != nil }) {
+                Button { reviewing = s } label: { Label("Repasar", systemImage: "rectangle.on.rectangle.angled") }
+                Button { asking = s } label: { Label("Preguntar", systemImage: "bubble.left.and.text.bubble.right") }
+                Button { ExamGuide.exportPDF(s) } label: { Label("Guía de examen", systemImage: "doc.richtext") }
+            }
             if let s = f.subject {
                 Menu {
                     Button("Editar nombre e icono…") { editingSubject = .some(s) }

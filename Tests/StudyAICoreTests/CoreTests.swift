@@ -256,5 +256,52 @@ import Testing
         #expect(WindowTitle.clean("Tema 5. Obligaciones solidarias - Google Chrome") == "Tema 5. Obligaciones solidarias")
         #expect(WindowTitle.clean("2026-11-26 10:30 1234567890 - Google Chrome") == nil)
         #expect(WindowTitle.clean("https://unir.zoom.us/rec/play/AbC123xyz987 - Reproduciendo audio") == nil)
+        #expect(WindowTitle.clean("Meet - abc-defg-hij - Google Chrome") == nil)
+        #expect(WindowTitle.clean("Tema 3 Derecho civil - YouTube - Google Chrome") == "Tema 3 Derecho civil")
+        #expect(WindowTitle.clean("Reunión de tutoría | Microsoft Teams") == "Reunión de tutoría")
+    }
+}
+
+@Suite struct StudyToolsTests {
+    @Test func fixesMisheardTerms() {
+        let terms = ["SharePoint", "Digital Brains", "Outlook", "cerebro", "Confluence"]
+        #expect(TermFixer.fix("se conecta con Sherpoint y el digital Brain.", terms: terms) == "se conecta con SharePoint y el Digital Brains.")
+        #expect(TermFixer.fix("Cerebro nuevo en sharepoint", terms: terms) == "Cerebro nuevo en SharePoint")
+        // Palabras corrientes y plurales no se tocan.
+        #expect(TermFixer.fix("los cerebros y el contrato", terms: terms) == "los cerebros y el contrato")
+        #expect(TermFixer.fix("vamos a salir", terms: ["Salir"]) == "vamos a salir")
+    }
+
+    @Test func guessesSubject() {
+        let subjects = ["Derecho Civil", "Derecho Mercantil", "Historia del Derecho"]
+        #expect(SubjectGuess.byTitle("Tema 5 Derecho Civil - UNIR", subjects: subjects) == "Derecho Civil")
+        #expect(SubjectGuess.byTitle("Sociedades: tema 3 de Mercantil", subjects: subjects) == "Derecho Mercantil")
+        #expect(SubjectGuess.byTitle("Clase de Derecho", subjects: subjects) == nil)
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = TimeZone(identifier: "Europe/Madrid")!
+        let d = { (s: String) in ISO8601DateFormatter().date(from: s)! }
+        let history = [(d("2026-11-10T17:00:00Z"), "Derecho Civil"), (d("2026-11-17T17:10:00Z"), "Derecho Civil"),
+                       (d("2026-11-18T17:00:00Z"), "Derecho Mercantil")]
+        #expect(SubjectGuess.bySchedule(d("2026-11-24T17:05:00Z"), history: history, calendar: cal) == "Derecho Civil")
+        #expect(SubjectGuess.bySchedule(d("2026-11-24T10:00:00Z"), history: history, calendar: cal) == nil)
+    }
+
+    @Test func findsReminderDates() {
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = TimeZone(identifier: "Europe/Madrid")!
+        let ref = cal.date(from: DateComponents(year: 2026, month: 11, day: 27))!
+        let ymd = { (d: Date?) -> String? in
+            d.map { cal.dateComponents([.year, .month, .day], from: $0) }.map { "\($0.year!)-\($0.month!)-\($0.day!)" }
+        }
+        #expect(ymd(ReminderDate.find(in: "Actividad 2 entrega 14 de diciembre", after: ref, calendar: cal)) == "2026-12-14")
+        #expect(ymd(ReminderDate.find(in: "Examen parcial voluntario 22 de enero", after: ref, calendar: cal)) == "2027-1-22")
+        #expect(ymd(ReminderDate.find(in: "entrega el 3/12", after: ref, calendar: cal)) == "2026-12-3")
+        #expect(ReminderDate.find(in: "Leer el caso práctico", after: ref, calendar: cal) == nil)
+        #expect(ReminderDate.find(in: "examen el 31 de febrero", after: ref, calendar: cal) == nil)
+        #expect(ReminderDate.find(in: "vale 1/2 de la nota", after: ref, calendar: cal) == nil)
+        #expect(ymd(ReminderDate.find(in: "entrega el 3/12 de 2026", after: ref, calendar: cal)) == "2026-12-3")
+        let ics = CalendarFile.ics(title: "Examen, parcial", date: ref, notes: "x", calendar: cal)
+        #expect(ics.contains("DTSTART;VALUE=DATE:20261127") && ics.contains("SUMMARY:Examen\\, parcial"))
+        #expect(AnkiExport.tsv([("¿Qué?", "Una\tcosa")]) == "¿Qué?\tUna cosa\n")
     }
 }

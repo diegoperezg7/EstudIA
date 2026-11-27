@@ -7,15 +7,18 @@ import SwiftData
 @MainActor enum LibraryMirror {
     private static var pending: Task<Void, Never>?
     private static var observer: NSObjectProtocol?
+    /// Guardado aquí y no capturado en el aviso: el cierre del observador es @Sendable y ModelContext no lo es.
+    private static var context: ModelContext?
 
     static func start(_ context: ModelContext) {
+        self.context = context
         export(context)
         observer = NotificationCenter.default.addObserver(forName: ModelContext.didSave, object: nil, queue: .main) { _ in
             MainActor.assumeIsolated {
                 pending?.cancel()
                 pending = Task {
                     try? await Task.sleep(for: .seconds(8))
-                    guard !Task.isCancelled else { return }
+                    guard !Task.isCancelled, let context = LibraryMirror.context else { return }
                     export(context)
                 }
             }

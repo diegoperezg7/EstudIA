@@ -247,6 +247,10 @@ struct LectureDetailView: View {
             Banner(icon: "sparkles", text: "Los apuntes de esta clase no llegaron a generarse.") {
                 Button("Generar") { processor.process(lecture) }
             }
+        } else if lecture.cloudRetryAt != nil, let error = lecture.processingError {
+            Banner(icon: "clock", text: error) {
+                Button("Hacerlo ya con el Mac") { processor.process(lecture, local: true) }
+            }
         } else if let error = lecture.processingError {
             Banner(icon: "exclamationmark.triangle", text: error, tint: .orange) {
                 if !lecture.segments.isEmpty {
@@ -302,6 +306,7 @@ private struct TimeChip: View {
 
 private struct SummaryTab: View {
     let lecture: Lecture
+    @State private var reviewing = false
 
     var body: some View {
         if let summary = lecture.summary {
@@ -337,6 +342,8 @@ private struct SummaryTab: View {
                     }
                     .textSelection(.enabled)
 
+                    ReminderDatesCard(summary: summary, lectureTitle: lecture.displayTitle, lectureDate: lecture.createdAt)
+
                     if !cited.sources.isEmpty {
                         VStack(alignment: .leading, spacing: 8) {
                             Text("Fuentes en la transcripción").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
@@ -351,8 +358,12 @@ private struct SummaryTab: View {
 
                     if !lecture.reviewQuestions.isEmpty {
                         VStack(alignment: .leading, spacing: 12) {
-                            Label("Preguntas de repaso", systemImage: "graduationcap.fill")
-                                .font(.headline).foregroundStyle(Theme.ink)
+                            HStack {
+                                Label("Preguntas de repaso", systemImage: "graduationcap.fill")
+                                    .font(.headline).foregroundStyle(Theme.ink)
+                                Spacer()
+                                Button { reviewing = true } label: { Label("Repasar con tarjetas", systemImage: "rectangle.on.rectangle.angled") }
+                            }
                             ForEach(Array(lecture.reviewQuestions.enumerated()), id: \.offset) { i, q in
                                 HStack(alignment: .firstTextBaseline, spacing: 10) {
                                     Text("\(i + 1)").font(.caption.weight(.bold)).foregroundStyle(.white)
@@ -370,9 +381,14 @@ private struct SummaryTab: View {
                 .padding(22)
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
+            .sheet(isPresented: $reviewing) { reviewSheet }
         } else {
             PendingView(lecture: lecture, title: "Aún no hay resumen", icon: "text.badge.star")
         }
+    }
+
+    @ViewBuilder private var reviewSheet: some View {
+        FlashcardsView(title: lecture.displayTitle, cards: Flashcard.cards(of: [lecture]))
     }
 
     /// El resumen con un numerito volado tras cada idea, enlazado al párrafo de la transcripción del que sale.
@@ -612,7 +628,11 @@ private struct TranscriptTab: View {
     let isLive: Bool
     @Binding var target: Double?
     @Environment(LectureProcessor.self) private var processor
+    @Environment(\.modelContext) private var context
     @State private var following = true
+    /// Nombre de orador que se está corrigiendo y el nuevo.
+    @State private var renaming: String?
+    @State private var newName = ""
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -628,6 +648,23 @@ private struct TranscriptTab: View {
             Divider()
             list.frame(maxHeight: .infinity)
         }
+        .alert("Cambiar nombre", isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } })) {
+            TextField("Nombre", text: $newName)
+            Button("Cambiar") { rename() }
+            Button("Cancelar", role: .cancel) {}
+        } message: {
+            Text("Se cambia en toda la clase. Déjalo vacío para quitarlo.")
+        }
+    }
+
+    /// El nombre leído en pantalla puede salir mal (iniciales, un rótulo mal leído): se corrige en todos los párrafos.
+    private func rename() {
+        guard let old = renaming else { return }
+        let name = newName.trimmingCharacters(in: .whitespacesAndNewlines)
+        for segment in lecture.segments where segment.speaker == old { segment.speaker = name.isEmpty ? nil : name }
+        lecture.screenTerms = lecture.screenTerms.compactMap { $0 == old ? (name.isEmpty ? nil : name) : $0 }
+        try? context.save()
+        renaming = nil
     }
 
     @ViewBuilder private var list: some View {
@@ -702,6 +739,10 @@ private struct TranscriptTab: View {
                         Label(speaker, systemImage: "person.wave.2.fill")
                             .font(.caption.weight(.semibold))
                             .foregroundStyle(Theme.speakerColor(speaker))
+                            .contextMenu {
+                                Button("Cambiar nombre…") { newName = speaker; renaming = speaker }
+                            }
+                            .help("Clic derecho para corregir el nombre")
                     }
                     Text(segment.text).font(.system(size: 13)).lineSpacing(5).textSelection(.enabled)
                 }
@@ -975,10 +1016,11 @@ private struct ChatTab: View {
         let transcript = lecture.transcriptText
         let summary = lecture.summary
         let language = lecture.language
+        let terms = LectureProcessor.terms(for: lecture)
         Task {
             var reply: Message
             do {
-                let r = try await StudyAI.chat(q, history: history, transcript: transcript, summary: summary, language: language)
+                let r = try await StudyAI.chat(q, history: history, transcript: transcript, summary: summary, language: language, terms: terms)
                 // Si añade algo, se enseña lo añadido: lo que se ve es lo que queda guardado.
                 let shown = r.action == .none || r.addition.isEmpty ? r.answer : r.addition
                 reply = Message(fromUser: false, text: shown, sources: SourceIndex(lecture).sources(in: shown))

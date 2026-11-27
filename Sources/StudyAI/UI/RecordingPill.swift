@@ -229,15 +229,37 @@ private struct PillView: View {
     }
 
     /// «¿Grabar esta clase?»: aparece sola al entrar en una reunión de Zoom o al poner un vídeo de clase.
+    /// El icono de la app donde suena la clase (Chrome, Zoom…), con un punto rojo: «esto se puede grabar».
+    private func appIcon(_ offer: ClassDetector.Source) -> some View {
+        let icon = offer.bundleID.flatMap { NSWorkspace.shared.urlForApplication(withBundleIdentifier: $0) }
+            .map { NSWorkspace.shared.icon(forFile: $0.path) }
+        return Group {
+            if let platform = offer.platform {
+                // Meet, YouTube, Teams… en el navegador: su logo sobre blanco, como el icono de una app.
+                Image(platform.logo).resizable().scaledToFit().padding(5)
+                    .background(.white, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+            } else if let icon {
+                Image(nsImage: icon).resizable().interpolation(.high)
+            } else {
+                Image(systemName: offer.kind == .zoom ? "video.fill" : "play.rectangle.fill")
+                    .font(.system(size: 14, weight: .semibold)).foregroundStyle(Theme.lavender)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity).background(.white.opacity(0.1), in: Circle())
+            }
+        }
+        .frame(width: 30, height: 30)
+        .overlay(alignment: .bottomTrailing) {
+            Circle().fill(Theme.recording).frame(width: 9, height: 9)
+                .overlay(Circle().stroke(Theme.night, lineWidth: 1.5))
+        }
+    }
+
     private func offerPill(_ offer: ClassDetector.Source) -> some View {
         HStack(spacing: 10) {
-            Image(systemName: offer.kind == .zoom ? "video.fill" : "play.rectangle.fill")
-                .font(.system(size: 14, weight: .semibold)).foregroundStyle(Theme.lavender)
-                .frame(width: 30, height: 30).background(.white.opacity(0.1), in: Circle())
+            appIcon(offer)
             VStack(alignment: .leading, spacing: 0) {
-                Text(offer.kind == .zoom ? "Has entrado en una reunión de Zoom" : "Parece una clase en \(offer.app)")
+                Text("Clase detectada en \(offer.displayName)")
                     .font(.system(size: 12, weight: .semibold))
-                Text(offer.kind == .zoom ? "¿Grabar y transcribir esta clase?" : offer.title)
+                Text(offer.title.isEmpty ? "¿Grabar y transcribir esta clase?" : offer.title)
                     .font(.system(size: 11)).foregroundStyle(.white.opacity(0.65)).lineLimit(1)
                     .frame(maxWidth: 220, alignment: .leading)
             }

@@ -14,6 +14,27 @@ import StudyAICore
     var reminders: [String]
 }
 
+/// Los mismos apuntes con más margen, para los bloques grandes que se mandan a un proveedor externo.
+@Generable struct BlockNotesLarge {
+    @Guide(description: "Título breve del tema que trata este fragmento de la clase")
+    var title: String
+    @Guide(description: "Ideas clave explicadas por el profesor: frases completas y concretas que se entienden solas, con el dato, la definición o el ejemplo", .count(4...12))
+    var keyPoints: [String]
+    @Guide(description: "Conceptos o términos técnicos importantes de este fragmento, con su definición", .maximumCount(8))
+    var terms: [Term]
+    @Guide(description: "Avisos prácticos del profesor en este fragmento, con su fecha si la dice: entregas de actividades, fechas de examen, qué preparar para la próxima clase, qué entra o cae en el examen. Lista vacía si no da ninguno", .maximumCount(5))
+    var reminders: [String]
+
+    var notes: BlockNotes { BlockNotes(title: title, keyPoints: keyPoints, terms: terms, reminders: reminders) }
+}
+
+@Generable struct ReviewCard {
+    @Guide(description: "Pregunta de repaso tipo examen sobre el contenido de la clase, sin mencionar la transcripción ni los apuntes")
+    var question: String
+    @Guide(description: "Respuesta correcta y breve (1 o 2 frases), según lo explicado en la clase")
+    var answer: String
+}
+
 @Generable struct Term {
     var term: String
     @Guide(description: "Definición breve, según lo dicho en la clase")
@@ -37,8 +58,8 @@ import StudyAICore
     var title: String
     @Guide(description: "De qué trató la clase y qué hay que llevarse de ella, en 2 o 3 frases directas. Sin fórmulas como «en esta clase» o «el profesor explica»")
     var overview: String
-    @Guide(description: "Preguntas de repaso tipo examen sobre el contenido de la clase, sin mencionar la transcripción ni los apuntes", .count(5))
-    var reviewQuestions: [String]
+    @Guide(description: "Preguntas de repaso con su respuesta", .count(5))
+    var review: [ReviewCard]
 }
 
 @Generable enum ChatAction {
@@ -141,7 +162,15 @@ enum StudyAI {
 
     /// Cuánto texto de apuntes cabe al escribir el resumen.
     /// Con el modelo del Mac, tandas cortas: cada una da de 2 a 5 temas y así una clase larga sale bien desglosada.
-    static func digestChars(_ engine: AIEngine) -> Int { engine == .local ? blockChars : 24_000 }
+    /// Con un proveedor externo, ~3.500 tokens: la capa gratuita de Groq no admite más de 8.000 por minuto
+    /// contando instrucciones y respuesta, y una petición mayor se rechaza entera.
+    static func digestChars(_ engine: AIEngine) -> Int {
+        switch engine {
+        case .local: blockChars
+        case .external: 12_000
+        case .appleCloud: 24_000
+        }
+    }
 
     /// Tope de respuesta y poca temperatura: sin tope, el modelo del Mac a veces se desboca hasta llenar su ventana.
     static let options = GenerationOptions(temperature: 0.4, maximumResponseTokens: largeLocalContext ? 1_600 : 1_000)
@@ -163,6 +192,7 @@ enum StudyAI {
         /// nil si los apuntes salieron pero el resumen final falló: no se tiran los apuntes por ello.
         var summary: String?
         var reviewQuestions: [String]
+        var reviewAnswers: [String]
         var title: String?
         var skippedBlocks: Int
         /// Por qué se acabó usando el modelo del Mac si se había elegido otro. nil si no hizo falta.
@@ -173,15 +203,22 @@ enum StudyAI {
     final class Run: @unchecked Sendable {
         var engine: AIEngine
         var fallbackReason: String?
+        var terms: [String] = []
         init(_ engine: AIEngine) { self.engine = engine }
     }
 
     /// `material`: texto de las diapositivas o del PDF de la clase que acompaña a cada bloque (vacío si no hay).
+    /// `terms`: palabras que el reconocedor suele oír mal (vocabulario, asignatura, lo que se vio en pantalla).
+    /// `engine`: para forzar el modelo del Mac aunque haya otro elegido.
     static func process(transcript: String, language: ClassLanguage = .spanish, material: (String) -> String = { _ in "" },
+                        terms: [String] = [], engine: AIEngine? = nil,
                         progress: @escaping @MainActor (Double, String) -> Void) async throws -> Output {
-        let blocks = Chunker.chunk(transcript, maxChars: blockChars)
+        let run = Run(engine ?? AIEngine.usable)
+        run.terms = terms
+        // Con un proveedor externo, bloques el doble de grandes: las instrucciones y el esquema se mandan una vez
+        // por bloque, así que con menos bloques se gasta menos cupo. Si cae al modelo del Mac, se parten solos.
+        let blocks = Chunker.chunk(transcript, maxChars: run.engine == .external ? 12_000 : blockChars)
         guard !blocks.isEmpty else { throw ProcessingError.emptyTranscript }
-        let run = Run(AIEngine.usable)
 
         var notes: [BlockNotes] = []
         var skipped = 0
@@ -206,6 +243,8 @@ enum StudyAI {
                 overview = try await self.overview(of: sections, language: language, run: run)
             } catch is CancellationError {
                 throw CancellationError()
+            } catch CloudError.dailyQuota(let until) {
+                throw CloudError.dailyQuota(until)
             } catch {
                 NSLog("StudyAI: la idea central falló: \(error)")
             }
@@ -214,7 +253,8 @@ enum StudyAI {
         await progress(1, "Listo")
 
         return Output(notesMarkdown: markdown(notes), summary: summary.isEmpty ? nil : summary,
-                      reviewQuestions: overview?.reviewQuestions ?? [], title: overview?.title,
+                      reviewQuestions: overview?.review.map(\.question) ?? [], reviewAnswers: overview?.review.map(\.answer) ?? [],
+                      title: overview?.title,
                       skippedBlocks: skipped, fallbackReason: run.fallbackReason)
     }
 
@@ -223,6 +263,10 @@ enum StudyAI {
         do {
             var prompt = "Toma apuntes de este fragmento de la clase:\n\n\(block)"
             if !material.isEmpty { prompt += "\n\nMaterial de la clase que acompaña a este fragmento (diapositivas o documento), para afinar nombres y datos:\n\n\(material)" }
+            if !run.terms.isEmpty {
+                prompt += "\n\nLa transcripción automática oye mal nombres propios y términos técnicos. Si aparece algo parecido a uno de estos, escríbelo así: \(run.terms.prefix(60).joined(separator: ", "))."
+            }
+            if run.engine == .external { return [try await respond(prompt, as: BlockNotesLarge.self, language: language, run: run).notes] }
             return [try await respond(prompt, as: BlockNotes.self, language: language, run: run)]
         } catch let error as LanguageModelSession.GenerationError {
             // No cabe en la ventana, o los filtros del modelo lo rechazan: se parte en dos y se reintenta.
@@ -274,6 +318,8 @@ enum StudyAI {
                     made = try await respond(prompt, as: DigestSections.self, language: language, run: run).sections.map { ($0.title, $0.points) }
                 } catch is CancellationError {
                     throw CancellationError()
+                } catch CloudError.dailyQuota(let until) {
+                    throw CloudError.dailyQuota(until)
                 } catch {
                     NSLog("StudyAI: los temas de la parte \(i + 1) fallaron: \(error)")
                 }
@@ -295,7 +341,7 @@ enum StudyAI {
 
                 \(text.prefix(limit))
 
-                Escribe el título, la idea central y preguntas de repaso.
+                Escribe el título, la idea central y preguntas de repaso con su respuesta.
                 """, as: DigestOverview.self, language: language, run: run)
         }
         do {
@@ -335,6 +381,8 @@ enum StudyAI {
                 return try await cloudRespond(prompt, as: type, language: language, engine: run.engine)
             } catch is CancellationError {
                 throw CancellationError()
+            } catch CloudError.dailyQuota(let until) {
+                throw CloudError.dailyQuota(until) // se deja pendiente: mejor esperar al proveedor que un resumen peor
             } catch {
                 NSLog("StudyAI: el modelo en la nube falló, sigo con el del Mac: \(error)")
                 run.fallbackReason = error.localizedDescription
@@ -358,8 +406,25 @@ enum StudyAI {
         // El mismo esquema que usa el modelo de Apple, como JSON Schema, y la respuesta se lee con el mismo tipo.
         let schema = String(data: try JSONEncoder().encode(T.generationSchema), encoding: .utf8) ?? "{}"
         let system = instructions(language) + "\n\nResponde solo con un objeto JSON que cumpla este esquema:\n" + schema
-        let json = try await CloudLLM.chat(system: system, user: prompt, config: config)
-        return try T(GeneratedContent(json: json))
+        // De vez en cuando el modelo devuelve el objeto dentro de ```json, en una lista o sin un campo: se pide otra vez.
+        var lastError: Error = CloudError.emptyAnswer
+        for _ in 0..<3 {
+            let shape = (try? JSONSerialization.jsonObject(with: try JSONEncoder().encode(T.generationSchema))) as? [String: Any]
+            let text: String
+            do {
+                text = try await CloudLLM.chat(system: system, user: prompt, config: config, schema: shape)
+            } catch CloudError.badGeneration {
+                lastError = CloudError.badGeneration
+                continue
+            }
+            do {
+                return try T(GeneratedContent(json: CloudLLM.jsonObject(in: text)))
+            } catch {
+                NSLog("StudyAI: respuesta del proveedor sin el formato pedido (\(error)): \(text.prefix(200))")
+                lastError = error
+            }
+        }
+        throw lastError
     }
 
     /// El modelo del Mac con los filtros pensados para transformar texto ajeno (resumir, tomar apuntes):
@@ -417,7 +482,7 @@ enum StudyAI {
     /// propone un texto para añadir al resumen o a sus notas (la app lo aplica y deja deshacerlo).
     /// `history`: los últimos turnos, para entender «explícamelo mejor» o «añade eso».
     static func chat(_ message: String, history: [(fromUser: Bool, text: String)], transcript: String, summary: String?,
-                     language: ClassLanguage) async throws -> ChatReply {
+                     language: ClassLanguage, terms: [String] = []) async throws -> ChatReply {
         let chunks = Chunker.chunk(transcript, maxChars: 1_200)
         let recent = history.suffix(4)
         let context = Retriever.top(chunks, for: message + " " + recent.map(\.text).joined(separator: " "), k: 3)
@@ -428,6 +493,7 @@ enum StudyAI {
             prompt += "Conversación hasta ahora:\n" + recent.map { "\($0.fromUser ? "Estudiante" : "Asistente"): \($0.text.prefix(400))" }
                 .joined(separator: "\n") + "\n\n"
         }
+        if !terms.isEmpty { prompt += "Así se escriben los nombres y términos de esta clase (la transcripción puede traerlos mal): \(terms.prefix(40).joined(separator: ", ")).\n\n" }
         prompt += "Mensaje de la estudiante: \(message)\n\nResponde de forma clara y breve. Si la clase no trata el tema, dilo."
         let turn = try await respond(prompt, as: ChatTurn.self, language: language)
         guard turn.action != .none else { return ChatReply(action: .none, answer: turn.answer, addition: "") }
@@ -440,6 +506,19 @@ enum StudyAI {
             Escribe solo el párrafo que se añadirá a \(target), basado en la clase. Sin introducciones ni comentarios.
             """, as: String.self, language: language)
         return ChatReply(action: turn.action, answer: turn.answer, addition: addition)
+    }
+}
+
+extension StudyAI {
+    /// Pregunta sobre varias clases a la vez (toda una asignatura), con el modelo del Mac.
+    /// `fragments` ya vienen con su clase y minuto; la respuesta los cita como [1], [2]…
+    static func answer(_ question: String, fragments: [String], language: ClassLanguage, terms: [String]) async throws -> String {
+        var prompt = "Fragmentos de las clases de la asignatura:\n\n"
+            + fragments.enumerated().map { "[\($0.offset + 1)] \($0.element)" }.joined(separator: "\n---\n")
+        if !terms.isEmpty { prompt += "\n\nAsí se escriben los nombres y términos (la transcripción puede traerlos mal): \(terms.prefix(40).joined(separator: ", "))." }
+        prompt += "\n\nPregunta de la estudiante: \(question)\n\nResponde de forma clara y breve usando solo esos fragmentos. "
+            + "Indica entre corchetes de qué fragmento sale cada dato, como [2]. Si no lo tratan, dilo."
+        return try await respond(prompt, as: String.self, language: language)
     }
 }
 

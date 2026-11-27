@@ -259,14 +259,17 @@ public enum WindowTitle {
     static let separators = [" - ", " – ", " — ", " | ", " · ", " :: "]
     static let noise: Set<String> = ["google chrome", "safari", "microsoft edge", "firefox", "mozilla firefox", "brave", "arc",
                                      "audio playing", "reproduciendo audio", "playing audio", "reproduciendo",
-                                     "camera or microphone recording"]
+                                     "camera or microphone recording", "youtube", "meet", "google meet", "zoom",
+                                     "microsoft teams", "webex", "classroom", "google classroom", "moodle"]
 
     public static func clean(_ title: String, prefer keywords: [String] = []) -> String? {
         var parts = [title]
         for sep in separators { parts = parts.flatMap { $0.components(separatedBy: sep) } }
         let segments = parts.compactMap { part -> String? in
             let p = part.trimmingCharacters(in: .whitespaces)
-            guard !noise.contains(p.lowercased()) else { return nil }
+            // Ni la plataforma ni el código de la reunión de Meet («abc-defg-hij») dicen de qué va la clase.
+            guard !noise.contains(p.lowercased()),
+                  p.range(of: #"^[a-z]{3}-[a-z]{4}-[a-z]{3}$"#, options: .regularExpression) == nil else { return nil }
             let words = p.split(separator: " ").filter { word in
                 let w = String(word)
                 let digits = w.filter(\.isNumber).count

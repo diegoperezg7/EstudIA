@@ -4,7 +4,7 @@ import SwiftUI
 
 /// Ajustes guardados (UserDefaults) que se leen fuera de las vistas.
 enum Prefs {
-    static let nameKey = "userName", appearanceKey = "appearance", languageKey = "classLanguage", speakersKey = "watchSpeakers"
+    static let nameKey = "userName", appearanceKey = "appearance", languageKey = "classLanguage", speakersKey = "watchSpeakers", vocabularyKey = "vocabulary"
 
     /// El nombre del saludo: el que Ana haya escrito o, si no, el de su cuenta del Mac.
     static var name: String {
@@ -27,6 +27,12 @@ enum Prefs {
     }
 
     static var indicator: Indicator { Indicator(rawValue: UserDefaults.standard.string(forKey: indicatorKey) ?? "") ?? .both }
+
+    /// Palabras que la transcripción y la IA deben escribir bien: «SharePoint, Digital Brains, cerebro».
+    static var vocabulary: [String] {
+        (UserDefaults.standard.string(forKey: vocabularyKey) ?? "").split(whereSeparator: { $0 == "," || $0 == "\n" })
+            .map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+    }
 
     static var watchSpeakers: Bool { UserDefaults.standard.object(forKey: speakersKey) as? Bool ?? true }
 
@@ -54,6 +60,7 @@ struct SettingsView: View {
     @AppStorage(Prefs.appearanceKey) private var appearance: Prefs.Appearance = .system
     @AppStorage(Prefs.languageKey) private var language: ClassLanguage = .spanish
     @AppStorage(Prefs.speakersKey) private var watchSpeakers = true
+    @AppStorage(Prefs.vocabularyKey) private var vocabulary = ""
     @AppStorage(Prefs.autoLanguageKey) private var autoLanguage = true
     @AppStorage(Prefs.indicatorKey) private var indicator: Prefs.Indicator = .both
     @State private var pillReset = false
@@ -126,10 +133,18 @@ struct SettingsView: View {
                             }
                         }
                         Divider()
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("Vocabulario")
+                            TextField("SharePoint, Digital Brains, Outlook…", text: $vocabulary, axis: .vertical)
+                                .textFieldStyle(.roundedBorder).lineLimit(2...4)
+                            Text("Nombres y términos que suelen salir mal en la transcripción, separados por comas. Se corrigen al transcribir y la IA los escribe bien en el resumen. Lo que se ve escrito en pantalla durante la clase se añade solo.")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                        Divider()
                         Toggle(isOn: $watchSpeakers) {
                             VStack(alignment: .leading, spacing: 2) {
                                 Text("Poner el nombre de quién habla")
-                                Text("Mira la pantalla cada 15 s (solo en el Mac, sin guardar imágenes). Gasta algo más de batería.")
+                                Text("En Teams, Zoom o Meet, lee el nombre del recuadro resaltado de quien habla. Mira la pantalla cada 3 s, solo en el Mac y sin guardar imágenes.")
                                     .font(.caption).foregroundStyle(.secondary)
                             }
                         }
@@ -370,6 +385,17 @@ private struct AIEngineCard: View {
                     .font(.caption).foregroundStyle(.secondary)
                 if AIEngine.appleCloudAvailable { checkRow("Probar") }
             case .external:
+                HStack {
+                    Menu("Proveedor") {
+                        ForEach(CloudLLM.presets) { p in
+                            Button(p.name) { url = p.url; model = p.model; models = []; status = nil }
+                        }
+                    }
+                    .fixedSize()
+                    if let page = CloudLLM.presets.first(where: { $0.url == url })?.keyPage, let link = URL(string: page) {
+                        Link("Conseguir una clave gratis", destination: link).font(.caption)
+                    }
+                }
                 TextField("Dirección", text: $url, prompt: Text(CloudLLM.defaultURL)).textFieldStyle(.roundedBorder)
                 SecureField("Clave de API", text: $key, prompt: Text("Clave de API"))
                     .textFieldStyle(.roundedBorder)
@@ -380,7 +406,7 @@ private struct AIEngineCard: View {
                     Picker("Modelo", selection: $model) { ForEach(models, id: \.self) { Text($0).tag($0) } }
                 }
                 checkRow("Comprobar")
-                Text("Cualquier servicio compatible con la API de OpenAI. Groq tiene una capa gratuita con límites por minuto y por día. La clave se guarda en el Llavero. Con esta opción, la transcripción de la clase se envía a ese proveedor. Para un modelo en este Mac con Ollama: http://localhost:11434/v1, sin clave.")
+                Text("Cualquier servicio compatible con la API de OpenAI. Recomendado: Groq con openai/gpt-oss-120b, gratis y sin tarjeta; su cupo diario da para unas 4 clases largas al día. Si se agota, el resto se hace con el modelo del Mac. La clave se guarda en el Llavero. Con esta opción, la transcripción de la clase se envía a ese proveedor.")
                     .font(.caption).foregroundStyle(.secondary)
             }
 
@@ -423,8 +449,12 @@ private struct AIEngineCard: View {
                 if engine == .external {
                     guard let base = CloudLLM.baseURL(url) else { status = "La dirección tiene que empezar por https:// (o http://localhost para un modelo en este Mac)."; return }
                     models = try await CloudLLM.models(baseURL: base, key: key.trimmingCharacters(in: .whitespacesAndNewlines))
-                    if !models.contains(model) { model = models.first ?? "" }
-                    status = models.isEmpty ? "La clave vale, pero el proveedor no lista modelos: escribe el nombre a mano." : "Clave correcta. Elige el modelo."
+                    if !models.isEmpty, !models.contains(model) { model = models.first ?? "" }
+                    guard !model.isEmpty else { status = "La clave vale. Elige o escribe el modelo y vuelve a comprobar."; return }
+                    // Una petición de verdad, como las de los apuntes: así se sabe que el modelo responde en JSON.
+                    let start = Date.now
+                    _ = try await StudyAI.cloudRespond("Escribe un tema de prueba sobre el agua.", as: DigestSection.self, language: .spanish, engine: .external)
+                    status = "Funciona: \(model) respondió en \(Int(Date.now.timeIntervalSince(start).rounded())) s."
                 } else {
                     _ = try await StudyAI.cloudRespond("Escribe un tema de prueba sobre el agua.", as: DigestSection.self, language: .spanish, engine: .appleCloud)
                     status = "Funciona."

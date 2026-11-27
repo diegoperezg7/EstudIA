@@ -55,11 +55,10 @@ final class SystemAudioCapture: NSObject, SCStreamOutput, SCStreamDelegate, @unc
         config.sampleRate = 48_000
         config.channelCount = 1
         if wantsFrames {
-            // Suficiente para leer rótulos de nombres; un fotograma cada 4 s.
-            let scale = min(1, 1280 / Double(display.width))
-            config.width = Int(Double(display.width) * scale)
-            config.height = Int(Double(display.height) * scale)
-            config.minimumFrameInterval = CMTime(value: 4, timescale: 1)
+            // Un fotograma cada 2 s al tamaño de la pantalla en puntos: los rótulos de nombre tienen que poder leerse.
+            config.width = display.width
+            config.height = display.height
+            config.minimumFrameInterval = CMTime(value: 2, timescale: 1)
         } else {
             // ScreenCaptureKit siempre captura vídeo; lo dejamos en lo mínimo y se descarta.
             config.width = 2

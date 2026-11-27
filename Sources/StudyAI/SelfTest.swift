@@ -2,6 +2,7 @@ import AVFoundation
 import Foundation
 import ImageIO
 import StudyAICore
+import SwiftData
 
 /// Pruebas reales del pipeline sin interfaz, para validar cada pieza en un Mac concreto.
 ///   --selftest-capture <salida.wav> <segundos>   (lanzar con `open`, necesita el permiso de la app)
@@ -20,6 +21,32 @@ enum SelfTest {
                 let started = Date()
                 let r = try await StudyAI.chat(args[1], history: [], transcript: text, summary: nil, language: args[safe: 2] == "en" ? .english : .spanish)
                 log("acción=\(r.action) (\(String(format: "%.1f", Date().timeIntervalSince(started))) s)\nrespuesta: \(r.answer)\nañadir: \(r.addition)")
+            case "--selftest-answer":
+                // transcripción + pregunta → respuesta de «Preguntar a la asignatura» (fragmentos como en la app)
+                let text = try String(contentsOfFile: args[0], encoding: .utf8)
+                let chunks = Chunker.chunk(text, maxChars: 900)
+                let top = Retriever.top(chunks, for: args[1], k: 4).map { "Clase «Prueba», minuto 0:00: \($0)" }
+                log(try await StudyAI.answer(args[1], fragments: top, language: .spanish, terms: Prefs.vocabulary))
+            case "--selftest-guide":
+                // biblioteca (STUDYAI_STORE_DIR) → guía de examen de la primera asignatura con resúmenes, en Markdown
+                let container = try Store.container()
+                let ctx = ModelContext(container)
+                var subjects = try ctx.fetch(FetchDescriptor<Subject>()).filter { $0.lectures.contains { $0.summary != nil } }
+                if subjects.isEmpty, Store.testDirectory != nil {
+                    // Solo en una copia: asignatura de prueba con las clases que tienen resumen.
+                    let s = Subject(name: "Asignatura de prueba")
+                    ctx.insert(s)
+                    for l in try ctx.fetch(FetchDescriptor<Lecture>()) where l.summary != nil { l.subject = s }
+                    try ctx.save()
+                    subjects = [s]
+                }
+                guard let s = subjects.first else { log("no hay asignaturas con resúmenes"); return 1 }
+                log(ExamGuide.markdown(s))
+                if let out = args.first {
+                    let md = ExamGuide.markdown(s)
+                    await MainActor.run { ExamGuide.writePDF(md, to: URL(fileURLWithPath: out)) }
+                    log("PDF: \(out)")
+                }
             case "--selftest-language":
                 // audio → confianza de cada idioma y el detectado
                 let buffers = try LanguageDetector.buffers(of: URL(fileURLWithPath: args[0]))
@@ -35,8 +62,23 @@ enum SelfTest {
                 for path in args {
                     guard let src = CGImageSourceCreateWithURL(URL(fileURLWithPath: path) as CFURL, nil),
                           let image = CGImageSourceCreateImageAtIndex(src, 0, nil) else { log("\(path): no se pudo leer"); continue }
+                    log("\((path as NSString).lastPathComponent): rótulos \(SpeakerVision.nameLabels(in: image).map(\.name))")
+                    log("\((path as NSString).lastPathComponent): términos \(await SpeakerVision.read(image).terms.sorted())")
                     log("\((path as NSString).lastPathComponent) → \(await SpeakerVision.guess(image) ?? "(nadie)")")
+                    // Rótulos que Vision sitúa un poco fuera de la imagen: no deben tumbar la app.
+                    if let p = Pixels(image) {
+                        let w = CGFloat(p.width), h = CGFloat(p.height)
+                        for r in [CGRect(x: -30, y: -10, width: 60, height: 20), CGRect(x: w - 10, y: h - 5, width: 80, height: 30),
+                                  CGRect(x: w + 40, y: h + 40, width: 50, height: 20), CGRect(x: -200, y: -200, width: 50, height: 20)] {
+                            _ = p.hasBorder(near: r)
+                        }
+                        log("rótulos fuera de la imagen: sin fallo")
+                    }
                 }
+            case "--selftest-batch":
+                // «Volver a generar todos» sobre una copia (STUDYAI_STORE_DIR) y el estado en que queda cada clase.
+                guard Store.testDirectory != nil else { log("solo con STUDYAI_STORE_DIR"); return 1 }
+                try await batch()
             default: log("Modo desconocido: \(mode)"); return 2
             }
             return 0
@@ -111,13 +153,25 @@ enum SelfTest {
 
     // MARK: Texto → apuntes
 
+    @MainActor private static func batch() async throws {
+        let container = try Store.container() // vivo mientras dure: sin él, el contexto cae
+        let ctx = container.mainContext
+        let processor = LectureProcessor(context: ctx)
+        processor.regenerateAll()
+        while processor.batch != nil { try await Task.sleep(for: .milliseconds(500)) }
+        for l in try ctx.fetch(FetchDescriptor<Lecture>(sortBy: [SortDescriptor(\.createdAt, order: .reverse)])) where !l.transcriptText.isEmpty {
+            log("\(l.displayTitle.prefix(40)) · pendiente=\(l.cloudRetryAt.map { _ in "sí" } ?? "no") · resumen=\(l.summary?.count ?? 0) · \(l.processingError?.prefix(50) ?? "")")
+        }
+    }
+
     private static func ai(path: String, language: ClassLanguage) async throws {
         let text = try String(contentsOfFile: path, encoding: .utf8)
         print("disponibilidad=\(AIAvailability.current) motor=\(AIEngine.usable.rawValue) caracteres=\(text.count)")
         let started = Date()
-        let out = try await StudyAI.process(transcript: text, language: language) { f, step in print(String(format: "%3.0f%% %@", f * 100, step)) }
+        print("vocabulario: \(Prefs.vocabulary)")
+        let out = try await StudyAI.process(transcript: text, language: language, terms: Prefs.vocabulary) { f, step in print(String(format: "%3.0f%% %@", f * 100, step)) }
         print("\n## Resumen\n\(out.summary ?? "(sin resumen)")\n\n## Preguntas")
-        out.reviewQuestions.forEach { print("- \($0)") }
+        for (i, q) in out.reviewQuestions.enumerated() { print("- \(q)\n  → \(out.reviewAnswers[safe: i] ?? "(sin respuesta)")") }
         print("\n## Apuntes\n\(out.notesMarkdown)\n\nbloques omitidos=\(out.skippedBlocks)")
         print("respaldo al modelo del Mac: \(out.fallbackReason ?? "no")")
         print(String(format: "tardó %.0f s", Date().timeIntervalSince(started)))
